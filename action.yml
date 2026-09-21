@@ -7,7 +7,15 @@ branding:
 inputs:
   config:
     description: Repository-relative JSON lint configuration.
-    default: .jev-lint.json
+  model:
+    description: Jev model ID, for example jev-1.13.0. Required with inline inputs.
+  glob:
+    description: Repository-relative file glob; multiple patterns may be separated by newlines.
+  questions:
+    description: YAML list of yes/no questions. Strings expect yes with probability at least 0.8; objects can override expect and minProbability.
+  per-file:
+    description: Review each file separately instead of reviewing all matched files together.
+    default: 'false'
   api-key:
     description: TypeSafe API key. Selected target contents are sent to TypeSafe.
     required: true
@@ -18,4 +26,4 @@ outputs:
     description: Whether all questions passed.
 runs:
   using: node24
-  main: src/main.mjs
+  main: dist/main.mjs

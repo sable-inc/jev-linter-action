@@ -12,4 +12,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - run: npm ci
       - run: npm test
+      - run: npm run build
+      - name: Check committed bundle matches source
+        run: |
+          if ! git diff --exit-code -- dist/; then
+            echo '::error::Bundle is stale. Install the Bun version in .bun-version, run npm ci and npm run build, then commit dist/.'
+            exit 1
+          fi
