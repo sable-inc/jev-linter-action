@@ -1,14 +1,14 @@
-import { appendFile, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { inside, lint } from './lint.mjs';
+import { lint } from './lint.mjs';
+import { loadConfig } from './inputs.mjs';
 
 const escape = text => String(text).replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
 const markdown = text => String(text).replaceAll('|', '\\|').replaceAll('\n', ' ').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 try {
   const root = resolve(process.env.GITHUB_WORKSPACE || process.cwd());
-  const configPath = await inside(root, process.env.INPUT_CONFIG || process.argv[2] || '.jev-lint.json');
-  const config = JSON.parse(await readFile(configPath, 'utf8'));
+  const config = await loadConfig(root, process.env, process.argv[2]);
   const report = await lint(config, root, process.env['INPUT_API-KEY'] || process.env.TYPESAFE_API_KEY);
   const reportPath = resolve(process.env.RUNNER_TEMP || tmpdir(), `jev-lint-${process.pid}.json`);
   await writeFile(reportPath, JSON.stringify(report, null, 2) + '\n', { mode: 0o600, flag: 'wx' });

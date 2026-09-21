@@ -5,6 +5,15 @@
   "type": "module",
   "description": "Ask review questions about repository files with Jev, and gate CI on the answers.",
   "license": "MIT",
-  "engines": {"node": ">=24"},
-  "scripts": {"test": "node --test", "lint": "node src/main.mjs"}
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test",
+    "lint": "node src/main.mjs",
+    "build": "bun build src/main.mjs --target=node --outfile=dist/main.mjs"
+  },
+  "dependencies": {
+    "yaml": "2.9.0"
+  }
 }
