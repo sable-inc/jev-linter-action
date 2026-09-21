@@ -1,0 +1,10 @@
+{
+  "name": "jev-linter-action",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Ask review questions about repository files with Jev, and gate CI on the answers.",
+  "license": "MIT",
+  "engines": {"node": ">=24"},
+  "scripts": {"test": "node --test", "lint": "node src/main.mjs"}
+}

@@ -1,0 +1,21 @@
+name: Jev Linter
+description: Evaluate repository files against authored yes/no review questions with TypeSafe Jev.
+author: sable-inc
+branding:
+  icon: check-circle
+  color: purple
+inputs:
+  config:
+    description: Repository-relative JSON lint configuration.
+    default: .jev-lint.json
+  api-key:
+    description: TypeSafe API key. Selected target contents are sent to TypeSafe.
+    required: true
+outputs:
+  report:
+    description: JSON report path, containing judgments and file names but no file contents.
+  passed:
+    description: Whether all questions passed.
+runs:
+  using: node24
+  main: src/main.mjs
