@@ -13,6 +13,8 @@ test('inline workflow list needs no file and supplies passing expectations', asy
 });
 test('question objects support negative expectations, thresholds and multiline text', () => {
  const config = inlineConfig({...inputs, perFile: 'true', questions: '- question: >\n    Are there contradictions\n    after overrides?\n  expect: false\n  minProbability: 0.9\n  id: contradictions'});
+ assert.equal(config.suites[0].questions[0].id, 'contradictions');
+ assert.equal(config.suites[0].questions[0].question, 'Are there contradictions after overrides?\n');
  assert.equal(config.suites[0].perFile, true);
  assert.equal(config.suites[0].questions[0].expect, false);
  assert.equal(config.suites[0].questions[0].minProbability, 0.9);
