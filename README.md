@@ -60,7 +60,11 @@ Local use:
 npm ci
 TYPESAFE_API_KEY=... node /path/to/jev-linter-action/src/main.mjs .jev-lint.json
 npm test
-npm run build # Bun 1.3.10 (matches CI); rebuild the checked-in Node bundle after changes
+npm run build # Rebuild the checked-in Node bundle after changes
 ```
+
+Install the exact Bun version in [`.bun-version`](.bun-version) before rebuilding.
+Local builds enforce this pin and CI reads the same file. Commit the rebuilt
+`dist/` files with source changes; CI prints any bundle drift and fails with rebuild instructions.
 
 Exit codes: 0 passed, 1 review check failed, 2 configuration/provider failure. Tests use mocked HTTP responses and need no key. MIT licensed.

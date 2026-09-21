@@ -11,7 +11,7 @@
   "scripts": {
     "test": "node --test",
     "lint": "node src/main.mjs",
-    "build": "bun build src/main.mjs --target=node --outfile=dist/main.mjs"
+    "build": "node scripts/build.mjs"
   },
   "dependencies": {
     "yaml": "2.9.0"
