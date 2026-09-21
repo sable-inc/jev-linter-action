@@ -15,7 +15,7 @@ inputs:
     description: YAML list of yes/no questions. Strings expect yes with probability at least 0.8; objects can override expect and minProbability.
   per-file:
     description: Review each file separately instead of reviewing all matched files together.
-    default: 'false' 
+    default: 'false'
   api-key:
     description: TypeSafe API key. Selected target contents are sent to TypeSafe.
     required: true
