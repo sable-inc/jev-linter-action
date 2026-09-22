@@ -58,7 +58,18 @@ export function candidates(files, context) {
   const units = files.flatMap(paragraphs);
   const counts = new Map();
   for (const unit of units) counts.set(unit.text, (counts.get(unit.text) ?? 0) + 1);
-  return units.filter(unit => counts.get(unit.text) === 1 && occurrence(context, unit.text));
+  const mapped = units.filter(unit => counts.get(unit.text) === 1).map(unit => ({ unit, match: occurrence(context, unit.text) })).filter(item => item.match).sort((a, b) => a.match.start - b.match.start);
+  const ambiguous = new Set();
+  let group = [], end = -1;
+  for (const item of mapped) {
+    if (item.match.start >= end) { group = []; end = -1; }
+    group.push(item.unit);
+    end = Math.max(end, item.match.end);
+    if (group.length > 1) for (const unit of group) ambiguous.add(unit);
+  }
+  // An embedded quote matching another source does not establish which file authored it.
+  const matched = new Set(mapped.map(item => item.unit));
+  return units.filter(unit => matched.has(unit) && !ambiguous.has(unit));
 }
 
 export async function collectSources(root, patterns) {

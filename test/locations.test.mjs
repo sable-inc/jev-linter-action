@@ -25,6 +25,8 @@ test('paragraphs retain CRLF source line ranges and mapping rejects ambiguity', 
   assert.equal(candidates([file, { ...file, path: 'other.md' }], JSON.stringify({ text })).length, 0);
   assert.equal(candidates([file], `${text}\n${text}`).length, 0);
   assert.equal(candidates([file], 'Unrelated content').length, 0);
+  const containing = { path: 'quoted.md', content: `The example says: ${text} This is a quote, not a requirement.` };
+  assert.equal(candidates([file, containing], containing.content).length, 0);
 });
 
 test('focus keeps the complete Unicode target and fits both Jev budgets', () => {
