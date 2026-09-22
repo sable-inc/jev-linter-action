@@ -17,26 +17,27 @@ inputs:
     description: Review each file separately instead of reviewing all matched files together.
     default: 'false'
   api-key:
-    description: TypeSafe API key. Selected target contents are sent to TypeSafe.
-    required: true
+    description: TypeSafe API key, required for linting. Not used by publish-reports. Selected target contents are sent to TypeSafe.
   locate:
     description: Ask Jev to identify authored passages contributing to failed rules. Leaves the original verdict unchanged.
     default: 'false'
   source-glob:
     description: Newline-separated globs of authored source files for line mapping. Optional patterns may match no files; the total set must not be empty.
   locate-max-requests:
-    description: Maximum additional Jev localization requests per action run (1–128). Omitted candidates are reported.
+    description: Maximum additional Jev localization requests per action run (1–512), with up to four source passages batched per request. Omitted candidates are reported.
     default: '32'
   post-comments:
-    description: Post verified source findings to a same-repository pull_request. Requires pull-requests write permission.
+    description: Post inline findings in one review. For a matrix, keep this false and use one downstream publish-reports step. Never posts conversation summaries.
     default: 'false'
   github-token:
-    description: GitHub token for optional PR comments; never sent to TypeSafe.
+    description: GitHub token for optional PR comments and prioritizing diff passages during localization; never sent to TypeSafe.
   review-id:
-    description: Stable identifier for this matrix agent/suite, used to deduplicate PR comments on the same commit.
+    description: Stable identifier for the combined PR review, used to deduplicate inline findings across runs and commits.
   max-comments:
-    description: Maximum inline comments for this review-id and PR head (0–20); all remaining locations appear in the summary.
+    description: Maximum new inline comments for this review-id and PR head (0–20). Other findings remain in check summaries and artifacts.
     default: '5'
+  publish-reports:
+    description: Globs of saved reports from this workflow run. Publishes one deduplicated inline review without calling Jev. Mutually exclusive with lint inputs.
 outputs:
   report:
     description: JSON report path. Localization additionally records verified source passages and line ranges.

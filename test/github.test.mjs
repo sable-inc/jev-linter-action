@@ -8,7 +8,7 @@ const finding = { id: 'finding-1', rule: 'forced_scope', question: 'Must the vis
 const report = { passed: false, locations: { findings: [finding], requests: 1, omittedCandidates: 0, unlocatedGroups: 0 } };
 const options = { repo, token: 'github-only', reviewId: 'acme/demo', eventName: 'pull_request', event: { pull_request: { number: 4, head: { sha, repo: { full_name: repo } }, base: { repo: { full_name: repo } } } } };
 
-function server({ patch = '@@ -1,3 +1,3 @@\n # Demo\n \n+' + text, content = '# Demo\n\n' + text, stale = false, encoding = 'base64' } = {}) {
+function server({ patch = '@@ -1,3 +1,3 @@\n # Demo\n \n+' + text, content = '# Demo\n\n' + text, stale = false, encoding = 'base64', head = sha } = {}) {
   const comments = [], summaries = [], writes = [];
   let headChecks = 0;
   return { comments, summaries, writes, fetcher: async (url, request) => {
@@ -17,10 +17,11 @@ function server({ patch = '@@ -1,3 +1,3 @@\n # Demo\n \n+' + text, content = '# 
     const path = new URL(url).pathname;
     if (request.method === 'POST') {
       const body = JSON.parse(request.body); writes.push({ path, body });
-      (path.includes('/issues/') ? summaries : comments).push(body);
+      if (path.endsWith('/reviews')) comments.push(...body.comments.map(comment => ({ ...comment, commit_id: body.commit_id })));
+      else summaries.push(body);
       return Response.json(body);
     }
-    if (path.endsWith('/pulls/4')) return Response.json({ head: { sha: stale && ++headChecks > 1 ? 'b'.repeat(40) : sha }, state: 'open' });
+    if (path.endsWith('/pulls/4')) return Response.json({ head: { sha: stale && ++headChecks > 1 ? 'b'.repeat(40) : head }, state: 'open' });
     if (path.endsWith('/files')) return Response.json([{ filename: 'moment.md', patch }]);
     if (path.includes('/contents/')) return Response.json({ encoding, content: encoding === 'base64' ? Buffer.from(content).toString('base64') : '' });
     if (path.includes('/issues/')) return Response.json(summaries);
@@ -40,19 +41,19 @@ test('posts source-verified inline comments and deduplicates a retry', async () 
   assert.equal(mock.comments[0].commit_id, sha);
   assert.ok(mock.comments[0].body.includes(text));
   await publishLocations(report, options, mock);
-  assert.equal(mock.writes.length, 2); // One inline comment and one summary total.
+  assert.equal(mock.writes.length, 1); // All inline comments are submitted as one review.
+  assert.equal(mock.summaries.length, 0);
 });
-test('unchanged source goes to a permalink summary; mismatched source never gets an inline comment', async () => {
+test('unchanged or mismatched source never creates a PR conversation comment', async () => {
   const outside = server({ patch: '' });
   await publishLocations(report, options, outside);
   assert.equal(outside.comments.length, 0);
-  assert.ok(outside.summaries[0].body.includes(`/blob/${sha}/moment.md#L3-L3`));
+  assert.equal(outside.writes.length, 0);
   const mismatch = server({ content: '# Different\n\nSomething else' });
   const result = await publishLocations(report, options, mismatch);
   assert.equal(result.unmapped, 1);
   assert.equal(mismatch.comments.length, 0);
-  assert.equal(mismatch.summaries.length, 1);
-  assert.ok(mismatch.summaries[0].body.includes('1 anchors could not be verified'));
+  assert.equal(mismatch.writes.length, 0);
 });
 test('stale heads and forks cannot receive review writes', async () => {
   const stale = server({ stale: true });
@@ -62,15 +63,16 @@ test('stale heads and forks cannot receive review writes', async () => {
   await assert.rejects(publishLocations(report, fork, server()), /same-repository/);
 });
 
-test('the inline comment cap applies across retries while all findings remain in the summary', async () => {
+test('the inline comment cap applies across retries while all findings remain in the report', async () => {
   const mock = server();
   const multiple = structuredClone(report);
   multiple.locations.findings.push({ ...finding, id: 'finding-2', rule: 'other_rule' });
   await publishLocations(multiple, { ...options, maxComments: 1 }, mock);
   await publishLocations(multiple, { ...options, maxComments: 1 }, mock);
   assert.equal(mock.comments.length, 1);
-  assert.equal(mock.summaries.length, 1);
-  assert.ok(mock.summaries[0].body.includes('other_rule'));
+  assert.equal(mock.writes.length, 1);
+  assert.equal(mock.summaries.length, 0);
+  assert.equal(multiple.locations.findings.length, 2);
 });
 
 test('manual events skip publishing and malformed contexts or limits fail before HTTP', async () => {
@@ -83,26 +85,43 @@ test('manual events skip publishing and malformed contexts or limits fail before
   await assert.rejects(publishLocations(report, invalid, deps), /Invalid GitHub PR context/);
 });
 
-test('unavailable large-file contents remain in the report and are disclosed without publication errors', async () => {
+test('unavailable large-file contents remain in the report without publication errors or PR noise', async () => {
   const mock = server({ encoding: 'none' });
   const result = await publishLocations(report, options, mock);
   assert.equal(result.unmapped, 1);
   assert.equal(mock.comments.length, 0);
-  assert.equal(mock.summaries.length, 1);
-  assert.ok(mock.summaries[0].body.includes('1 anchors could not be verified'));
+  assert.equal(mock.writes.length, 0);
   assert.equal(report.locations.findings[0].text, text);
 });
 
-test('large summaries retain every source link across deduplicated pages', async () => {
-  const mock = server({ patch: '' });
+test('no localized findings produce no GitHub calls or comments', async () => {
+  const empty = { ...report, locations: { ...report.locations, findings: [] } };
+  const result = await publishLocations(empty, options, { fetcher: async () => assert.fail('No GitHub call expected') });
+  assert.equal(result.comments, 0);
+});
+
+test('many findings produce only one bounded review and no summary comments', async () => {
+  const mock = server();
   const large = structuredClone(report);
-  large.locations.findings = Array.from({ length: 500 }, (_, i) => ({ ...finding, id: `finding-${i}`, path: `folder-${i}/moment.md` }));
+  large.locations.findings = Array.from({ length: 50 }, (_, i) => ({ ...finding, id: `finding-${i}`, rule: `rule_${i}` }));
   await publishLocations(large, options, mock);
-  assert.ok(mock.summaries.length > 1);
-  for (const summary of mock.summaries) assert.ok(summary.body.length < 55_000);
-  const bodies = mock.summaries.map(s => s.body).join('\n');
-  for (const f of large.locations.findings) assert.ok(bodies.includes(`/blob/${sha}/${f.path}#L3-L3`));
-  const writes = mock.writes.length;
+  assert.equal(mock.writes.length, 1);
+  assert.ok(mock.writes[0].path.endsWith('/reviews'));
+  assert.equal(mock.writes[0].body.event, 'COMMENT');
+  assert.equal(mock.comments.length, 5);
+  assert.equal(mock.summaries.length, 0);
   await publishLocations(large, options, mock);
-  assert.equal(mock.writes.length, writes);
+  assert.equal(mock.writes.length, 1);
+});
+
+test('the same finding is not reposted after an unrelated commit or a shifted line', async () => {
+  const first = server();
+  await publishLocations(report, options, first);
+  const head = 'c'.repeat(40);
+  const next = server({ head }); next.comments.push(...first.comments);
+  const nextOptions = structuredClone(options); nextOptions.event.pull_request.head.sha = head;
+  const nextReport = structuredClone(report); nextReport.locations.findings[0].line++;
+  const result = await publishLocations(nextReport, nextOptions, next);
+  assert.equal(result.duplicates, 1);
+  assert.equal(next.writes.length, 0);
 });

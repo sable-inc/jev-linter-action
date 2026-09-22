@@ -32,7 +32,7 @@ test('focus keeps the complete Unicode target and fits both Jev budgets', () => 
   const context = 'prefix '.repeat(7000) + JSON.stringify(unit.text).slice(1, -1) + ' suffix'.repeat(7000);
   const request = focusedRequest(context, unit, [failure], 'jev-1.13.0');
   assert.ok(request.contextTruncated);
-  assert.ok(request.files[0].content.includes(`JEV_TARGET_START\n${JSON.stringify(unit.text).slice(1, -1)}\nJEV_TARGET_END`));
+  assert.ok(request.files[0].content.includes(`JEV_TARGET_0_START\n${JSON.stringify(unit.text).slice(1, -1)}\nJEV_TARGET_0_END`));
   assert.ok(fits(requestFor(request.suite, request.files, 'jev-1.13.0')));
 });
 
@@ -44,7 +44,7 @@ test('localization reports only confident source coordinates and never changes t
     assert.equal(url, 'https://api.typesafe.ai/v1/systemone');
     assert.equal(request.headers.Authorization, 'Bearer jev-key');
     const body = JSON.parse(request.body);
-    assert.ok(body.state.files[0].content.includes('JEV_TARGET_START'));
+    assert.ok(body.state.files[0].content.includes('JEV_TARGET_0_START'));
     return Response.json({ answers: { location_0: { type: 'noul', noul: 0.95 } } });
   } });
   assert.deepEqual(report, snapshot);
@@ -77,11 +77,12 @@ test('budgets are enforced and reported while localization rotates between faile
   report.results.push({ ...failure, excerpts: [{ path: 'second.json', sha256: digest(third) }] });
   const seen = [];
   const result = await locate(report, root, { sourcePatterns: ['*.md'], model: 'jev-1.13.0', apiKey: 'key', maxRequests: 2 }, { fetcher: async (_, request) => {
-    seen.push(JSON.parse(request.body).state.files[0].content);
-    return Response.json({ answers: { location_0: { type: 'noul', noul: 0.95 } } });
+    const body = JSON.parse(request.body);
+    seen.push(body.state.files[0].content);
+    return Response.json({ answers: Object.fromEntries(Object.keys(body.questions).map(id => [id, { type: 'noul', noul: 0.95 }])) });
   } });
   assert.equal(result.requests, 2);
-  assert.equal(result.omittedCandidates, 1);
+  assert.equal(result.omittedCandidates, 0);
   assert.ok(seen[1].includes(third));
 });
 
@@ -89,7 +90,7 @@ test('localization is opt-in and publishing configuration is validated', () => {
   assert.equal(locationOptions({}).enabled, false);
   assert.throws(() => locationOptions({ INPUT_LOCATE: 'true' }), /source-glob/);
   assert.throws(() => locationOptions({ 'INPUT_POST-COMMENTS': 'true' }), /requires locate/);
-  assert.throws(() => locationOptions({ INPUT_LOCATE: 'true', 'INPUT_SOURCE-GLOB': '*.md', 'INPUT_LOCATE-MAX-REQUESTS': '129' }), /1–128/);
+  assert.throws(() => locationOptions({ INPUT_LOCATE: 'true', 'INPUT_SOURCE-GLOB': '*.md', 'INPUT_LOCATE-MAX-REQUESTS': '513' }), /1–512/);
 });
 
 test('positive rules localize a confident no without exposing the expected answer to Jev', async t => {
@@ -123,4 +124,20 @@ test('multiple failed rules share a request and answers retain the correct rule 
   assert.equal(result.requests, 1);
   assert.deepEqual(result.findings.map(f => [f.rule, f.expected, f.probability]), [['forced_scope', false, 0.9], ['yields_to_visitor', true, 0.95]]);
   assert.deepEqual(result.assessments.map(a => [a.rule, a.localized]), [['forced_scope', true], ['yields_to_visitor', true]]);
+});
+
+test('batches candidate passages and prioritizes diff lines within a bounded request budget', async t => {
+  const paragraphs = Array.from({ length: 6 }, (_, i) => `${text} Distinct authored paragraph number ${i}.`);
+  const { root, report } = await fixture(t, paragraphs.join('\n\n'));
+  await writeFile(join(root, 'moment.md'), paragraphs.join('\n\n'));
+  const result = await locate(report, root, { sourcePatterns: ['*.md'], model: 'jev-1.13.0', apiKey: 'key', maxRequests: 1, priority: new Map([['moment.md', new Set([11])]]) }, { fetcher: async (_, request) => {
+    const body = JSON.parse(request.body);
+    assert.equal(Object.keys(body.questions).length, 4);
+    assert.ok(body.state.files[0].content.includes(`JEV_TARGET_0_START\n${paragraphs[5]}\nJEV_TARGET_0_END`));
+    return Response.json({ answers: Object.fromEntries(Object.keys(body.questions).map(id => [id, { type: 'noul', noul: id === 'location_0' ? 0.9 : 0.2 }])) });
+  } });
+  assert.equal(result.requests, 1);
+  assert.equal(result.omittedCandidates, 2);
+  assert.equal(result.assessments.length, 4);
+  assert.deepEqual(result.findings.map(f => f.line), [11]);
 });

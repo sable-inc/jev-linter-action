@@ -41,7 +41,7 @@ export async function inside(root, file) {
   return actual;
 }
 
-export async function collect(root, patterns, perFile = false, { allowUnmatched = false } = {}) {
+export async function collect(root, patterns, perFile = false, { allowUnmatched = false, maxFileBytes = limit, maxTotalBytes = 16 * 1024 * 1024 } = {}) {
   const files = new Map();
   let bytes = 0;
   for (const pattern of patterns) {
@@ -53,7 +53,7 @@ export async function collect(root, patterns, perFile = false, { allowUnmatched 
       matched = true;
       if (files.has(actual)) continue;
       bytes += info.size;
-      if (info.size > limit || bytes > 16 * 1024 * 1024 || files.size >= 128) throw new Error('Target set exceeds limits (2 MiB per file, 16 MiB per suite, 128 files); narrow the suite');
+      if (info.size > maxFileBytes || bytes > maxTotalBytes || files.size >= 128) throw new Error(`Target set exceeds limits (${maxFileBytes} bytes per file, ${maxTotalBytes} bytes total, 128 files); narrow the suite`);
       const content = await readFile(actual, 'utf8');
       if (content.includes('\0')) throw new Error(`Target is binary: ${path}`);
       files.set(actual, { path: relative(root, resolve(root, path)).split(sep).join('/'), content });

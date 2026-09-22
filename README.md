@@ -105,22 +105,42 @@ both Jev budgets; this is recorded on the finding.
 This is conservative text matching, not a compiler source map. Duplicate/ambiguous matches,
 transformed text, paragraphs shorter than 32 characters, and individual lines longer than
 1,800 characters may remain unlocalized. The failed check remains visible. Localization is
-bounded to 32 additional requests by default (configurable 1–128), rotating across failed
-contexts; omitted candidates are reported. A contradiction requires supporting instructions
+bounded to 32 additional requests by default (configurable 1–512), batching up to four
+passages against the failed rules per request and rotating across failed contexts; omitted candidates are reported. A contradiction requires supporting instructions
 in that bounded context. These are probabilistic findings, not ground truth or generated fixes.
 
-Annotations work without PR-write access. With `post-comments`, the action rechecks source
-passages at the current PR head and comments on eligible diff lines. Findings in unchanged
-files link to exact source lines in a PR summary. New commits receive new reviews; retries on
-the same commit/review-id do not duplicate comments or exceed `max-comments`. Use a distinct,
-stable `review-id` for each matrix agent. Stale PR heads and forks cannot receive writes.
+Annotations work without PR-write access. With a GitHub token having `pull-requests: read`,
+localization prioritizes passages in the diff. With `post-comments`, verified findings on diff
+lines are submitted together in **one PR review**, capped by `max-comments`. No conversation
+summaries, empty reviews, or comments about missing findings are posted. Unchanged-line findings,
+unmapped passages, and coverage statistics stay in check summaries and report artifacts.
+Identical findings are deduplicated across retries and commits, even if line numbers shift.
+
+For a matrix, leave `post-comments: false` in every worker. Upload each worker's `report` output,
+then download those artifacts in **one downstream job** and invoke the action once:
+
+```yaml
+- uses: sable-inc/jev-linter-action@<reviewed-commit>
+  with:
+    publish-reports: jev-reports/**/jev-lint-*.json
+    github-token: ${{ github.token }}
+    review-id: prompt-lint
+    max-comments: 5
+```
+
+That publishing job needs `contents: read`, `actions: read` for artifact download, and
+`pull-requests: write`. It must run after the lint matrix even when judgments fail, using an
+`always()` condition that excludes cancelled runs and fork PRs. Reports must belong to the same
+repository, head SHA, and workflow run. Publication does not call Jev or need a TypeSafe key;
+it merges all findings and applies **one comment limit for the whole PR review**. Its successful
+exit means publishing succeeded, not that the original lint checks passed. Use a stable review ID
+and workflow concurrency per PR to serialize publication.
+
 Build and localize the PR head as in the checkout example, so coordinates refer to the same
-revision used for publication. A merge checkout can contain base-only changes whose coordinates
-do not match the PR head; those anchors remain unverified. GitHub may also omit inline content
-for large files; these findings remain in the report. Long summaries are split into deduplicated
-comments so every verified source permalink is retained.
-Run on `pull_request`, not `pull_request_target`. Source patterns can individually match no
-files (useful for optional agent folders); the total source set must not be empty.
+revision used for publication. Stale PR heads and forks cannot receive writes. A merge checkout
+may contain base-only changes that make coordinates unverified; GitHub may also omit inline
+content for large files. Those findings remain in checks and artifacts. Source patterns may
+individually match no files; the total source set must not be empty.
 
 The GitHub token goes only to `api.github.com`; TypeSafe receives the selected review context
 and localization questions. The JSON report includes verified source passages when localization
