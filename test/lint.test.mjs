@@ -51,7 +51,7 @@ test('file discovery is deterministic, deduplicated, and fails on missing target
   await assert.rejects(collect(root, ['outside.md']), /escapes repository/);
 });
 test('oversized and binary input are rejected without a request', async t => {
-  const root = await fixture(t); await writeFile(join(root, 'large.md'), 'x'.repeat(512 * 1024 + 1));
+  const root = await fixture(t); await writeFile(join(root, 'large.md'), 'x'.repeat(2 * 1024 * 1024 + 1));
   await assert.rejects(collect(root, ['large.md']), /exceeds/);
   await writeFile(join(root, 'binary.md'), 'x\0y'); await assert.rejects(collect(root, ['binary.md']), /binary/);
 });
@@ -65,10 +65,10 @@ test('per-file suites keep different agents separate while aggregate suites see 
   await assert.rejects(lint(config, root, '', deps), /required/);
 });
 
-test('per-file byte budgets allow many bounded documents without truncation', async t => {
+test('collection preserves large artifacts for request planning without truncation', async t => {
   const root = await fixture(t);
   for (const name of ['a.md', 'b.md']) await writeFile(join(root, name), 'a'.repeat(300000));
-  await assert.rejects(collect(root, ['*.md']), /exceeds/);
+  assert.equal((await collect(root, ['*.md'])).length, 2);
   const files = await collect(root, ['*.md'], true);
   assert.equal(files.length, 2); assert.equal(files[1].content.length, 300000);
 });
