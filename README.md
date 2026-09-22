@@ -57,6 +57,70 @@ one matrix job per agent. `glob` always selects the actual files to review; the 
 execute builds or know how to resolve a project's imports. Build all relevant sources first.
 Only locally bundled skills are reviewed, not remote-only platform skills.
 
+## Find the authored lines
+
+Enable `locate` to ask **Jev itself** which authored paragraphs contribute to failed rules.
+No generative LLM or second provider is needed. `glob` still selects the built agent;
+`source-glob` selects the original source files to map findings back to:
+
+```yaml
+permissions:
+  contents: read
+  pull-requests: write # Only needed for post-comments.
+steps:
+  - uses: actions/checkout@v4
+    with:
+      persist-credentials: false
+  - run: sable build --bundle -f acme/demo
+  - uses: sable-inc/jev-linter-action@<reviewed-commit>
+    with:
+      model: jev-1.13.0
+      glob: acme/demo/.sable/build/agent.bundle.json
+      questions: |
+        - id: forced_scope
+          question: Must the visitor finish the itinerary even after explicitly declining it?
+          expect: false
+      locate: true
+      source-glob: |
+        acme/demo/system/**/*.md
+        acme/demo/journey/**/*.md
+        acme/demo/skills/**/*.md
+        prompts/**/*.md
+      locate-max-requests: 32
+      post-comments: true
+      github-token: ${{ github.token }}
+      review-id: acme/demo
+      max-comments: 5
+      api-key: ${{ secrets.TYPESAFE_API_KEY }}
+```
+
+The first review decides pass/fail. For failures, code splits source into paragraphs, finds
+unique exact matches in the reviewed text (including JSON-escaped strings), and records the
+real file/line ranges. Jev judges a marked passage in the failed review's context against the
+failed rules. A localization probability of at least 0.8 produces an annotation. It never
+changes the original verdict. Context is cropped around a target only when necessary to keep
+both Jev budgets; this is recorded on the finding.
+
+This is conservative text matching, not a compiler source map. Duplicate/ambiguous matches,
+transformed text, paragraphs shorter than 32 characters, and individual lines longer than
+1,800 characters may remain unlocalized. The failed check remains visible. Localization is
+bounded to 32 additional requests by default (configurable 1–128), rotating across failed
+contexts; omitted candidates are reported. A contradiction requires supporting instructions
+in that bounded context. These are probabilistic findings, not ground truth or generated fixes.
+
+Annotations work without PR-write access. With `post-comments`, the action rechecks source
+passages at the current PR head and comments on eligible diff lines. Findings in unchanged
+files link to exact source lines in a PR summary. New commits receive new reviews; retries on
+the same commit/review-id do not duplicate comments or exceed `max-comments`. Use a distinct,
+stable `review-id` for each matrix agent. Stale PR heads and forks cannot receive writes.
+Run on `pull_request`, not `pull_request_target`. Source patterns can individually match no
+files (useful for optional agent folders); the total source set must not be empty.
+
+The GitHub token goes only to `api.github.com`; TypeSafe receives the selected review context
+and localization questions. The JSON report includes verified source passages when localization
+is enabled, so keep report artifacts within the repository's intended audience. Localization
+or posting errors return exit code 2 and preserve the original review report/verdict.
+
 For multi-suite configurations, the existing `config: .jev-lint.json` input
 remains supported (and local CLI file arguments still work). Do not mix `config`
 with inline inputs. Its JSON schema is:
@@ -88,7 +152,7 @@ Excerpts preserve every Unicode character, carry source character ranges, and ov
 consistency. Content is never silently truncated. Questions too large to leave useful context
 fail before requests; split the question set in that case.
 
-Outputs: `passed` and `report` (a JSON report path). GitHub gets a step summary and failure annotations. Reports contain filenames, questions, model IDs, raw yes probabilities, thresholds, and verdicts, not target contents. Upload the report explicitly if retention is needed.
+Outputs: `passed` and `report` (a JSON report path). GitHub gets a step summary and failure annotations. Base reports contain filenames, content hashes, questions, model IDs, probabilities, thresholds, and verdicts. Optional localization adds exact source passages and line ranges. Upload the report explicitly if retention is needed.
 
 Local use:
 

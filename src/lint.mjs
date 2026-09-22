@@ -1,5 +1,6 @@
 import { glob, readFile, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { createHash } from 'node:crypto';
 
 import { requestFor, assertBudget, planRequests, maxRequests, budgetOf } from './requests.mjs';
 
@@ -40,7 +41,7 @@ export async function inside(root, file) {
   return actual;
 }
 
-export async function collect(root, patterns, perFile = false) {
+export async function collect(root, patterns, perFile = false, { allowUnmatched = false } = {}) {
   const files = new Map();
   let bytes = 0;
   for (const pattern of patterns) {
@@ -57,7 +58,7 @@ export async function collect(root, patterns, perFile = false) {
       if (content.includes('\0')) throw new Error(`Target is binary: ${path}`);
       files.set(actual, { path: relative(root, resolve(root, path)).split(sep).join('/'), content });
     }
-    if (!matched) throw new Error(`No files matched ${pattern}`);
+    if (!matched && !allowUnmatched) throw new Error(`No files matched ${pattern}`);
   }
   return [...files.values()].sort((a, b) => a.path.localeCompare(b.path));
 }
@@ -84,7 +85,7 @@ export async function evaluate(suite, files, model, apiKey, { fetcher = fetch, s
     const answer = payload.answers[q.id];
     if (answer?.type !== 'noul' || !Number.isFinite(answer.noul) || answer.noul < 0 || answer.noul > 1) throw new Error(`Invalid or missing TypeSafe answer: ${q.id}`);
     const probability = q.expect ? answer.noul : 1 - answer.noul;
-    return { suite: suite.name, files: [...new Set(files.map(f => f.path))], excerpts: files.map(({ content, ...source }) => source), review: request.state.review, budget: budgetOf(request), id: q.id, question: q.question, expected: q.expect, yesProbability: answer.noul, probability, minProbability: q.minProbability, passed: probability >= q.minProbability, model: payload.model ?? model };
+    return { suite: suite.name, files: [...new Set(files.map(f => f.path))], excerpts: files.map(({ content, ...source }) => ({ ...source, sha256: createHash('sha256').update(content).digest('hex') })), review: request.state.review, budget: budgetOf(request), id: q.id, question: q.question, expected: q.expect, yesProbability: answer.noul, probability, minProbability: q.minProbability, passed: probability >= q.minProbability, model: payload.model ?? model };
   });
 }
 

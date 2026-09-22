@@ -1,15 +1,40 @@
-import { appendFile, writeFile } from 'node:fs/promises';
+import { appendFile, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { lint } from './lint.mjs';
 import { loadConfig } from './inputs.mjs';
+import { locate, locationOptions } from './locations.mjs';
+import { publishLocations } from './github.mjs';
 
 const escape = text => String(text).replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
 const markdown = text => String(text).replaceAll('|', '\\|').replaceAll('\n', ' ').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+const property = text => escape(text).replaceAll(',', '%2C').replaceAll(':', '%3A');
 try {
   const root = resolve(process.env.GITHUB_WORKSPACE || process.cwd());
   const config = await loadConfig(root, process.env, process.argv[2]);
-  const report = await lint(config, root, process.env['INPUT_API-KEY'] || process.env.TYPESAFE_API_KEY);
+  const options = locationOptions(process.env);
+  const apiKey = process.env['INPUT_API-KEY'] || process.env.TYPESAFE_API_KEY;
+  const report = await lint(config, root, apiKey);
+  let extensionFailed = false;
+  if (options.enabled) {
+    try {
+      report.locations = await locate(report, root, { ...options, model: config.model, apiKey });
+      for (const finding of report.locations.findings) {
+        const message = `Possible ${finding.rule} violation: ${finding.question} Required answer: ${finding.expected ? 'yes' : 'no'}. Jev localized this passage with probability ${finding.probability.toFixed(2)}. Review it in context.`;
+        if (process.env.GITHUB_ACTIONS === 'true') console.log(`::error file=${property(finding.path)},line=${finding.line},endLine=${finding.endLine},title=${property(`Jev: ${finding.rule}`)}::${escape(message)}`);
+        else console.log(`${finding.path}:${finding.line}-${finding.endLine} ${escape(message)}`);
+      }
+      if (options.post && !report.passed) {
+        const event = JSON.parse(await readFile(process.env.GITHUB_EVENT_PATH, 'utf8'));
+        report.locations.publication = await publishLocations(report, { event, eventName: process.env.GITHUB_EVENT_NAME, repo: process.env.GITHUB_REPOSITORY,
+          token: process.env['INPUT_GITHUB-TOKEN'], reviewId: process.env['INPUT_REVIEW-ID'], maxComments: options.maxComments });
+      }
+    } catch (error) {
+      extensionFailed = true;
+      report.localizationError = error.message;
+      console.error(`::error::Source localization/reporting failed: ${escape(error.message)}. Original Jev verdict is unchanged.`);
+    }
+  }
   const reportPath = resolve(process.env.RUNNER_TEMP || tmpdir(), `jev-lint-${process.pid}.json`);
   await writeFile(reportPath, JSON.stringify(report, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
   if (report.split) console.log('::warning::Review split to respect the Jev context budget. All content is covered with overlapping excerpts; conflicts between distant batches may be missed.');
@@ -24,8 +49,13 @@ try {
   if (process.env.GITHUB_STEP_SUMMARY) {
     const rows = report.results.map(r => `| ${markdown(r.suite)} | ${markdown(r.files.join(', '))} | ${markdown(r.id)} | ${r.probability.toFixed(3)} | ${r.minProbability} | ${r.passed ? 'Pass' : 'Fail / review'} |`);
     await appendFile(process.env.GITHUB_STEP_SUMMARY, ['## Jev lint', '', '| Suite | Files | Question | Expected-answer probability | Required | Result |', '| --- | --- | --- | --- | --- | --- |', ...rows, '', `Requests: ${report.requests}. Split review: ${report.split ? 'yes — distant batches are not compared together' : 'no'}.`, '', 'Probabilistic review checks; failures need review. This does not replace behavioral evals or code review.', ''].join('\n'));
+    if (report.locations) {
+      const locations = report.locations;
+      const lines = locations.findings.map(f => `- ${markdown(f.path)}:${f.line}–${f.endLine} — **${markdown(f.rule)}**, localization probability ${f.probability.toFixed(2)}${f.contextTruncated ? ' (cropped context)' : ''}`);
+      await appendFile(process.env.GITHUB_STEP_SUMMARY, ['\n## Source findings', '', ...lines, '', `${locations.requests} localization requests; ${locations.omittedCandidates} candidate passages omitted by the request limit; ${locations.unlocatedGroups} contexts had no unambiguous source match. Unlocalized checks still fail.`, '', 'Locations are source-verified probabilistic findings, not ground truth. Exact passages are in the JSON report.', ''].join('\n'));
+    }
   }
-  process.exitCode = report.passed ? 0 : 1;
+  process.exitCode = extensionFailed ? 2 : report.passed ? 0 : 1;
 } catch (error) {
   console.error(`::error::${escape(error.message)}`);
   process.exitCode = 2;

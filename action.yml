@@ -19,9 +19,27 @@ inputs:
   api-key:
     description: TypeSafe API key. Selected target contents are sent to TypeSafe.
     required: true
+  locate:
+    description: Ask Jev to identify authored passages contributing to failed rules. Leaves the original verdict unchanged.
+    default: 'false'
+  source-glob:
+    description: Newline-separated globs of authored source files for line mapping. Optional patterns may match no files; the total set must not be empty.
+  locate-max-requests:
+    description: Maximum additional Jev localization requests per action run (1–128). Omitted candidates are reported.
+    default: '32'
+  post-comments:
+    description: Post verified source findings to a same-repository pull_request. Requires pull-requests write permission.
+    default: 'false'
+  github-token:
+    description: GitHub token for optional PR comments; never sent to TypeSafe.
+  review-id:
+    description: Stable identifier for this matrix agent/suite, used to deduplicate PR comments on the same commit.
+  max-comments:
+    description: Maximum inline comments for this review-id and PR head (0–20); all remaining locations appear in the summary.
+    default: '5'
 outputs:
   report:
-    description: JSON report path, containing judgments and file names but no file contents.
+    description: JSON report path. Localization additionally records verified source passages and line ranges.
   passed:
     description: Whether all questions passed.
 runs:
