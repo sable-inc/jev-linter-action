@@ -81,11 +81,16 @@ export async function evaluate(suite, files, model, apiKey, { fetcher = fetch, s
   let payload;
   try { payload = await response.json(); } catch { throw new Error("TypeSafe returned invalid JSON"); }
   if (!object(payload?.answers)) throw new Error('TypeSafe returned no answer map');
+  const evidence = {
+    files: [...new Set(files.map(f => f.path))],
+    excerpts: files.map(({ content, ...source }) => ({ ...source, sha256: createHash('sha256').update(content).digest('hex') })),
+    review: request.state.review, budget: budgetOf(request),
+  };
   return suite.questions.map(q => {
     const answer = payload.answers[q.id];
     if (answer?.type !== 'noul' || !Number.isFinite(answer.noul) || answer.noul < 0 || answer.noul > 1) throw new Error(`Invalid or missing TypeSafe answer: ${q.id}`);
     const probability = q.expect ? answer.noul : 1 - answer.noul;
-    return { suite: suite.name, files: [...new Set(files.map(f => f.path))], excerpts: files.map(({ content, ...source }) => ({ ...source, sha256: createHash('sha256').update(content).digest('hex') })), review: request.state.review, budget: budgetOf(request), id: q.id, question: q.question, expected: q.expect, yesProbability: answer.noul, probability, minProbability: q.minProbability, passed: probability >= q.minProbability, model: payload.model ?? model };
+    return { suite: suite.name, ...evidence, id: q.id, question: q.question, expected: q.expect, yesProbability: answer.noul, probability, minProbability: q.minProbability, passed: probability >= q.minProbability, model: payload.model ?? model };
   });
 }
 

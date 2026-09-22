@@ -53,6 +53,7 @@ test('localization reports only confident source coordinates and never changes t
   assert.equal(result.findings[0].path, 'moment.md');
   const uncertain = await locate(report, root, options, { fetcher: async () => Response.json({ answers: { location_0: { type: 'noul', noul: 0.6 } } }) });
   assert.equal(uncertain.findings.length, 0);
+  assert.deepEqual(uncertain.assessments, [{ path: 'moment.md', line: 3, endLine: 3, rule: 'forced_scope', violationProbability: 0.6, localized: false }]);
   assert.equal(report.passed, false);
 });
 
@@ -110,4 +111,16 @@ test('authored marker collisions cannot select a different passage', async t => 
   const result = await locate(report, root, { sourcePatterns: ['*.md'], model: 'jev-1.13.0', apiKey: 'key' }, { fetcher: async () => assert.fail('No request should be sent') });
   assert.equal(result.unlocatedGroups, 1);
   assert.equal(result.requests, 0);
+});
+
+test('multiple failed rules share a request and answers retain the correct rule and expectation', async t => {
+  const { root, report } = await fixture(t);
+  report.results.push({ ...report.results[0], id: 'yields_to_visitor', question: 'Does the itinerary yield to the visitor?', expected: true });
+  const result = await locate(report, root, { sourcePatterns: ['*.md'], model: 'jev-1.13.0', apiKey: 'key' }, { fetcher: async (_, request) => {
+    assert.deepEqual(Object.keys(JSON.parse(request.body).questions), ['location_0', 'location_1']);
+    return Response.json({ answers: { location_1: { type: 'noul', noul: 0.05 }, location_0: { type: 'noul', noul: 0.9 } } });
+  } });
+  assert.equal(result.requests, 1);
+  assert.deepEqual(result.findings.map(f => [f.rule, f.expected, f.probability]), [['forced_scope', false, 0.9], ['yields_to_visitor', true, 0.95]]);
+  assert.deepEqual(result.assessments.map(a => [a.rule, a.localized]), [['forced_scope', true], ['yields_to_visitor', true]]);
 });

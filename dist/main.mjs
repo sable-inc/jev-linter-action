@@ -7138,12 +7138,18 @@ async function evaluate(suite, files, model, apiKey, { fetcher = fetch, sleep = 
   }
   if (!object(payload?.answers))
     throw new Error("TypeSafe returned no answer map");
+  const evidence = {
+    files: [...new Set(files.map((f) => f.path))],
+    excerpts: files.map(({ content, ...source }) => ({ ...source, sha256: createHash("sha256").update(content).digest("hex") })),
+    review: request.state.review,
+    budget: budgetOf(request)
+  };
   return suite.questions.map((q) => {
     const answer = payload.answers[q.id];
     if (answer?.type !== "noul" || !Number.isFinite(answer.noul) || answer.noul < 0 || answer.noul > 1)
       throw new Error(`Invalid or missing TypeSafe answer: ${q.id}`);
     const probability = q.expect ? answer.noul : 1 - answer.noul;
-    return { suite: suite.name, files: [...new Set(files.map((f) => f.path))], excerpts: files.map(({ content, ...source }) => ({ ...source, sha256: createHash("sha256").update(content).digest("hex") })), review: request.state.review, budget: budgetOf(request), id: q.id, question: q.question, expected: q.expect, yesProbability: answer.noul, probability, minProbability: q.minProbability, passed: probability >= q.minProbability, model: payload.model ?? model };
+    return { suite: suite.name, ...evidence, id: q.id, question: q.question, expected: q.expect, yesProbability: answer.noul, probability, minProbability: q.minProbability, passed: probability >= q.minProbability, model: payload.model ?? model };
   });
 }
 async function lint(config, root, apiKey, deps) {
@@ -7542,13 +7548,11 @@ async function publishLocations(report, { event, eventName, repo, token, reviewI
   for (const finding of report.locations.findings) {
     if (!contents.has(finding.path)) {
       const file = await api(`/contents/${encodePath(finding.path)}?ref=${pr.head.sha}`, "GET", undefined, true);
-      if (!file) {
+      if (!file || file.encoding !== "base64" || typeof file.content !== "string") {
         contents.set(finding.path, null);
         unmapped++;
         continue;
       }
-      if (file.encoding !== "base64" || typeof file.content !== "string")
-        throw new Error("GitHub source content unavailable");
       contents.set(finding.path, Buffer.from(file.content, "base64").toString("utf8").split(/\r?\n/));
     }
     if (!contents.get(finding.path) || contents.get(finding.path).slice(finding.line - 1, finding.endLine).join(`
@@ -7560,31 +7564,38 @@ async function publishLocations(report, { event, eventName, repo, token, reviewI
     const anchor = [...diffs.get(finding.path) ?? []].find((line) => line >= finding.line && line <= finding.endLine);
     if (!anchor || alreadyPosted + comments >= maxComments)
       continue;
-    const marker2 = `<!-- ${prefix}:${finding.id} -->`;
-    if (existing.some((comment) => comment.body?.includes(marker2)))
+    const marker = `<!-- ${prefix}:${finding.id} -->`;
+    if (existing.some((comment) => comment.body?.includes(marker)))
       continue;
     await current();
-    await api(`/pulls/${pr.number}/comments`, "POST", { commit_id: pr.head.sha, path: finding.path, line: anchor, side: "RIGHT", body: `${marker2}
+    await api(`/pulls/${pr.number}/comments`, "POST", { commit_id: pr.head.sha, path: finding.path, line: anchor, side: "RIGHT", body: `${marker}
 ${findingBody(finding, repo, pr.head.sha)}` });
     comments++;
   }
-  const marker = `<!-- ${prefix}:summary -->`;
-  if (!existingSummaries.some((comment) => comment.body?.includes(marker))) {
-    const rows = verified.map((f) => `- [${plain(f.path)}:${f.line}–${f.endLine}](${sourceLink(repo, pr.head.sha, f)}) — **${plain(f.rule)}**, ${f.probability.toFixed(2)}`);
-    let body = `${marker}
-### Jev source findings: ${plain(reviewId)}
+  const rows = verified.map((f) => `- [${plain(f.path)}:${f.line}–${f.endLine}](${sourceLink(repo, pr.head.sha, f)}) — **${plain(f.rule)}**, ${f.probability.toFixed(2)}`);
+  if (!rows.length)
+    rows.push("No source passage could be both confidently localized and verified at PR HEAD. The original failed checks still require review.");
+  const footer = `Jev remains ${report.passed ? "passing" : "failing"}; localization never changes its verdict. ${report.locations.requests} localization requests; ${report.locations.omittedCandidates} candidate passages omitted by the request limit; ${report.locations.unlocatedGroups} failed contexts had no unambiguous source match; ${unmapped} anchors could not be verified at PR HEAD.
 
-${rows.join(`
-`) || "No source passage passed the localization threshold. The original failed checks still require review."}
+Inline comments are limited to diff lines and at most ${maxComments} per review-id/head. Other findings link directly to source. Findings are probabilistic, not ground truth.`;
+  const pagesOfRows = [""];
+  for (const row of rows) {
+    if (row.length > 50000)
+      throw new Error("Source link exceeds the GitHub summary size budget");
+    if (pagesOfRows.at(-1).length + row.length + 1 > 50000)
+      pagesOfRows.push("");
+    pagesOfRows[pagesOfRows.length - 1] += row + `
+`;
+  }
+  for (const [index, rows2] of pagesOfRows.entries()) {
+    const marker = `<!-- ${prefix}:summary${index ? `-${index + 1}` : ""} -->`;
+    if (existingSummaries.some((comment) => comment.body?.includes(marker)))
+      continue;
+    const body = `${marker}
+### Jev source findings: ${plain(reviewId)} (${index + 1}/${pagesOfRows.length})
 
-Jev remains ${report.passed ? "passing" : "failing"}; localization never changes its verdict. ${report.locations.requests} localization requests; ${report.locations.omittedCandidates} candidate passages omitted by the request limit; ${report.locations.unlocatedGroups} failed contexts had no unambiguous source match; ${unmapped} anchors differed from PR HEAD.
-
-Inline comments are limited to diff lines and at most ${maxComments} per run. Other findings link directly to source. Findings are probabilistic, not ground truth.`;
-    if (body.length > 55000)
-      body = `${marker}
-### Jev source findings: ${plain(reviewId)}
-
-${verified.length} findings exceed the comment size limit. See the action report and source annotations for all locations. The original lint verdict is unchanged.`;
+${rows2}
+${footer}`;
     await current();
     await api(`/issues/${pr.number}/comments`, "POST", { body });
   }

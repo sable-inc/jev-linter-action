@@ -64,8 +64,8 @@ export async function publishLocations(report, { event, eventName, repo, token, 
   for (const finding of report.locations.findings) {
     if (!contents.has(finding.path)) {
       const file = await api(`/contents/${encodePath(finding.path)}?ref=${pr.head.sha}`, 'GET', undefined, true);
-      if (!file) { contents.set(finding.path, null); unmapped++; continue; }
-      if (file.encoding !== 'base64' || typeof file.content !== 'string') throw new Error('GitHub source content unavailable');
+      // GitHub omits inline content for large files. Preserve the finding in the report.
+      if (!file || file.encoding !== 'base64' || typeof file.content !== 'string') { contents.set(finding.path, null); unmapped++; continue; }
       contents.set(finding.path, Buffer.from(file.content, 'base64').toString('utf8').split(/\r?\n/));
     }
     if (!contents.get(finding.path) || contents.get(finding.path).slice(finding.line - 1, finding.endLine).join('\n').trim() !== finding.text) { unmapped++; continue; }
@@ -78,11 +78,19 @@ export async function publishLocations(report, { event, eventName, repo, token, 
     await api(`/pulls/${pr.number}/comments`, 'POST', { commit_id: pr.head.sha, path: finding.path, line: anchor, side: 'RIGHT', body: `${marker}\n${findingBody(finding, repo, pr.head.sha)}` });
     comments++;
   }
-  const marker = `<!-- ${prefix}:summary -->`;
-  if (!existingSummaries.some(comment => comment.body?.includes(marker))) {
-    const rows = verified.map(f => `- [${plain(f.path)}:${f.line}–${f.endLine}](${sourceLink(repo, pr.head.sha, f)}) — **${plain(f.rule)}**, ${f.probability.toFixed(2)}`);
-    let body = `${marker}\n### Jev source findings: ${plain(reviewId)}\n\n${rows.join('\n') || 'No source passage passed the localization threshold. The original failed checks still require review.'}\n\nJev remains ${report.passed ? 'passing' : 'failing'}; localization never changes its verdict. ${report.locations.requests} localization requests; ${report.locations.omittedCandidates} candidate passages omitted by the request limit; ${report.locations.unlocatedGroups} failed contexts had no unambiguous source match; ${unmapped} anchors differed from PR HEAD.\n\nInline comments are limited to diff lines and at most ${maxComments} per run. Other findings link directly to source. Findings are probabilistic, not ground truth.`;
-    if (body.length > 55_000) body = `${marker}\n### Jev source findings: ${plain(reviewId)}\n\n${verified.length} findings exceed the comment size limit. See the action report and source annotations for all locations. The original lint verdict is unchanged.`;
+  const rows = verified.map(f => `- [${plain(f.path)}:${f.line}–${f.endLine}](${sourceLink(repo, pr.head.sha, f)}) — **${plain(f.rule)}**, ${f.probability.toFixed(2)}`);
+  if (!rows.length) rows.push('No source passage could be both confidently localized and verified at PR HEAD. The original failed checks still require review.');
+  const footer = `Jev remains ${report.passed ? 'passing' : 'failing'}; localization never changes its verdict. ${report.locations.requests} localization requests; ${report.locations.omittedCandidates} candidate passages omitted by the request limit; ${report.locations.unlocatedGroups} failed contexts had no unambiguous source match; ${unmapped} anchors could not be verified at PR HEAD.\n\nInline comments are limited to diff lines and at most ${maxComments} per review-id/head. Other findings link directly to source. Findings are probabilistic, not ground truth.`;
+  const pagesOfRows = [''];
+  for (const row of rows) {
+    if (row.length > 50_000) throw new Error('Source link exceeds the GitHub summary size budget');
+    if (pagesOfRows.at(-1).length + row.length + 1 > 50_000) pagesOfRows.push('');
+    pagesOfRows[pagesOfRows.length - 1] += row + '\n';
+  }
+  for (const [index, rows] of pagesOfRows.entries()) {
+    const marker = `<!-- ${prefix}:summary${index ? `-${index + 1}` : ''} -->`;
+    if (existingSummaries.some(comment => comment.body?.includes(marker))) continue;
+    const body = `${marker}\n### Jev source findings: ${plain(reviewId)} (${index + 1}/${pagesOfRows.length})\n\n${rows}\n${footer}`;
     await current();
     await api(`/issues/${pr.number}/comments`, 'POST', { body });
   }

@@ -70,6 +70,7 @@ permissions:
 steps:
   - uses: actions/checkout@v4
     with:
+      ref: ${{ github.event.pull_request.head.sha || github.sha }}
       persist-credentials: false
   - run: sable build --bundle -f acme/demo
   - uses: sable-inc/jev-linter-action@<reviewed-commit>
@@ -113,6 +114,11 @@ passages at the current PR head and comments on eligible diff lines. Findings in
 files link to exact source lines in a PR summary. New commits receive new reviews; retries on
 the same commit/review-id do not duplicate comments or exceed `max-comments`. Use a distinct,
 stable `review-id` for each matrix agent. Stale PR heads and forks cannot receive writes.
+Build and localize the PR head as in the checkout example, so coordinates refer to the same
+revision used for publication. A merge checkout can contain base-only changes whose coordinates
+do not match the PR head; those anchors remain unverified. GitHub may also omit inline content
+for large files; these findings remain in the report. Long summaries are split into deduplicated
+comments so every verified source permalink is retained.
 Run on `pull_request`, not `pull_request_target`. Source patterns can individually match no
 files (useful for optional agent folders); the total source set must not be empty.
 
