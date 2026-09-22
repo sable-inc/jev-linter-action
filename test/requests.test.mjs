@@ -38,6 +38,20 @@ test('state plus longest question and state plus all questions have separate bou
  const questions=Array.from({length:64},(_,i)=>({...question,id:`q_${i}`,question:'x'.repeat(1000)}));
  assert.throws(()=>planRequests({...suite,questions},files,'jev-1.13.0'),/questions alone/);
 });
+test('a maximum-size artifact is completely covered by budgeted requests', () => {
+ const content='0123456789abcdef'.repeat(131072); // The supported 2 MiB file limit.
+ const jobs=planRequests(suite,[{path:'agent.bundle.json',content}],'jev-1.13.0');
+ let covered=0;
+ for(const job of jobs) {
+  assert.ok(fits(requestFor(suite,job.files,'jev-1.13.0',job.review)));
+  const part=job.files[0];
+  assert.ok(part.startCharacter<=covered);
+  assert.ok(part.endCharacter>covered);
+  assert.equal(part.content,content.slice(part.startCharacter,part.endCharacter));
+  covered=part.endCharacter;
+ }
+ assert.equal(covered,content.length);
+});
 test('every planned job is validated before paid requests, even when a later suite cannot fit', async t => {
  const root=await mkdtemp(join(tmpdir(),'jev-budget-')); t.after(()=>rm(root,{recursive:true,force:true}));
  await writeFile(join(root,'agent.json'),'{}'); let calls=0;

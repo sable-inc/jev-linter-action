@@ -7014,7 +7014,7 @@ function planRequests(suite, files, model) {
       let part = 1;
       while (start < chars.length) {
         const excerpt = (end) => ({ path: file.path, part, startCharacter: start, endCharacter: end, content: chars.slice(start, end).join("") });
-        let low = start, high = chars.length;
+        let low = start, high = Math.min(chars.length, start + stateQuestionBudget);
         while (low < high) {
           const end = Math.ceil((low + high) / 2);
           if (canFit([excerpt(end)]))
@@ -7266,7 +7266,8 @@ try {
   if (report.split)
     console.log("::warning::Review split to respect the Jev context budget. All content is covered with overlapping excerpts; conflicts between distant batches may be missed.");
   for (const result of report.results) {
-    const message = `${result.suite} / batch ${result.review.batch}/${result.review.batches} / ${result.files.join(", ")} / ${result.id}: expected ${result.expected}, probability ${result.probability.toFixed(3)}, required ${result.minProbability}`;
+    const batch = result.review.split ? ` / batch ${result.review.batch}/${result.review.batches}` : "";
+    const message = `${result.suite}${batch} / ${result.files.join(", ")} / ${result.id}: expected ${result.expected}, probability ${result.probability.toFixed(3)}, required ${result.minProbability}`;
     if (!result.passed && process.env.GITHUB_ACTIONS === "true")
       console.log(`::error::${escape(message)}`);
     else

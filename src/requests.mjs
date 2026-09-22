@@ -47,7 +47,8 @@ export function planRequests(suite, files, model) {
       let part = 1;
       while (start < chars.length) {
         const excerpt = end => ({ path: file.path, part, startCharacter: start, endCharacter: end, content: chars.slice(start, end).join('') });
-        let low = start, high = chars.length;
+        // Each character needs at least one serialized byte; larger probes cannot fit.
+        let low = start, high = Math.min(chars.length, start + stateQuestionBudget);
         while (low < high) {
           const end = Math.ceil((low + high) / 2);
           if (canFit([excerpt(end)])) low = end; else high = end - 1;
