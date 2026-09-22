@@ -180,7 +180,7 @@ export async function locate(report, root, { sourcePatterns, model, apiKey, maxR
       const id = digest(JSON.stringify([failure.suite, failure.id, unit.path, unit.line, unit.endLine, unit.text])).slice(0, 24);
       if (seen.has(id)) return;
       seen.add(id);
-      output.findings.push({ id, suite: failure.suite, rule: failure.id, question: failure.question, expected: failure.expected, advisory: failure.advisory === true,
+      output.findings.push({ id, suite: failure.suite, rule: failure.id, question: failure.question, expected: failure.expected,
         ...unit, probability: answer.probability, contextTruncated: job.contextTruncated });
     });
   }

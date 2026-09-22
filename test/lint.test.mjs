@@ -75,18 +75,3 @@ test('collection preserves large artifacts for request planning without truncati
 test('invalid provider JSON cannot disclose reflected target content', async () => {
   await assert.rejects(evaluate(suite, [], 'jev-latest', 'key', {fetcher: async () => new Response('private target content')}), /^Error: TypeSafe returned invalid JSON$/);
 });
-
-test('advisory judgments remain visible without clearing blocking failures or provider errors', async t => {
-  const root = await fixture(t); await writeFile(join(root, 'a.md'), 'Some authored instructions');
-  const advisory = {...question, advisory: true};
-  const run = questions => lint({...config, suites: [{...suite, questions}]}, root, 'key', {
-    fetcher: async () => Response.json({answers: Object.fromEntries(questions.map(q => [q.id, {type:'noul',noul:0.99}]))}),
-  });
-  const report = await run([advisory]);
-  assert.equal(report.passed, true);
-  assert.equal(report.results[0].passed, false);
-  assert.equal(report.results[0].advisory, true);
-  assert.equal((await run([advisory, {...question, id:'blocking'}])).passed, false);
-  assert.throws(() => validate({...config, suites:[{...suite, questions:[{...question, advisory:'true'}]}]}), /advisory must be a boolean/);
-  await assert.rejects(lint({...config, suites:[{...suite, questions:[advisory]}]}, root, 'key', {fetcher: async () => new Response('', {status:401})}), /HTTP 401/);
-});

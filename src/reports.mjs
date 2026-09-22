@@ -17,7 +17,6 @@ export function mergeReports(files, source) {
       if (typeof finding.path !== 'string' || !finding.path || finding.path.startsWith('/') || finding.path.split(/[\\/]/).includes('..') ||
           !Number.isInteger(finding.line) || finding.line < 1 || !Number.isInteger(finding.endLine) || finding.endLine < finding.line ||
           typeof finding.text !== 'string' || !finding.text || finding.text.length > 1800 ||
-          (finding.advisory !== undefined && typeof finding.advisory !== 'boolean') ||
           typeof finding.rule !== 'string' || typeof finding.question !== 'string' || typeof finding.expected !== 'boolean' ||
           !Number.isFinite(finding.probability) || finding.probability < 0.8 || finding.probability > 1) throw new Error('Invalid saved source finding');
       const id = findingFingerprint(finding);

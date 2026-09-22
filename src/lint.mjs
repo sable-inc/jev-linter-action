@@ -24,10 +24,9 @@ export function validate(config) {
     if (!Array.isArray(suite.questions) || !suite.questions.length || suite.questions.length > 64) throw new Error(`${suite.name}: questions must contain 1–64 entries`);
     const ids = new Set();
     for (const q of suite.questions) {
-      keys(q, ['id', 'question', 'expect', 'minProbability', 'advisory'], 'question');
+      keys(q, ['id', 'question', 'expect', 'minProbability'], 'question');
       if (typeof q.id !== 'string' || !/^[a-z][a-z0-9_]{0,63}$/.test(q.id) || ids.has(q.id)) throw new Error('Question IDs must be unique snake_case identifiers');
       ids.add(q.id);
-      if (q.advisory !== undefined && typeof q.advisory !== 'boolean') throw new Error(`${q.id}: advisory must be a boolean`);
       if (typeof q.question !== 'string' || !q.question.trim() || typeof q.expect !== 'boolean') throw new Error(`${q.id}: question and boolean expect are required`);
       if (!Number.isFinite(q.minProbability) || q.minProbability <= 0.5 || q.minProbability > 1) throw new Error(`${q.id}: minProbability must be > 0.5 and <= 1`);
     }
@@ -91,7 +90,7 @@ export async function evaluate(suite, files, model, apiKey, { fetcher = fetch, s
     const answer = payload.answers[q.id];
     if (answer?.type !== 'noul' || !Number.isFinite(answer.noul) || answer.noul < 0 || answer.noul > 1) throw new Error(`Invalid or missing TypeSafe answer: ${q.id}`);
     const probability = q.expect ? answer.noul : 1 - answer.noul;
-    return { suite: suite.name, ...evidence, id: q.id, question: q.question, expected: q.expect, advisory: q.advisory === true, yesProbability: answer.noul, probability, minProbability: q.minProbability, passed: probability >= q.minProbability, model: payload.model ?? model };
+    return { suite: suite.name, ...evidence, id: q.id, question: q.question, expected: q.expect, yesProbability: answer.noul, probability, minProbability: q.minProbability, passed: probability >= q.minProbability, model: payload.model ?? model };
   });
 }
 
@@ -111,5 +110,5 @@ export async function lint(config, root, apiKey, deps) {
     const batch = await Promise.all(jobs.slice(offset, offset + 3).map(j => evaluate(j.suite, j.files, config.model, apiKey, deps, j.review)));
     results.push(...batch.flat());
   }
-  return { passed: results.every(r => r.passed || r.advisory), split: jobs.some(job => job.review.split), requests: jobs.length, results };
+  return { passed: results.every(r => r.passed), split: jobs.some(job => job.review.split), requests: jobs.length, results };
 }

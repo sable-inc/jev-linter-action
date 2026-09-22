@@ -21,7 +21,7 @@ export function rightLines(patch = '') {
 }
 
 export function findingBody(finding, repo, sha) {
-  return `**Jev: ${plain(finding.rule)}** — ${finding.advisory ? 'advisory suggestion (does not block CI)' : 'possible rule violation'} (localization probability ${finding.probability.toFixed(2)}).\n\nRule: ${plain(finding.question)}\n\nRequired answer: **${finding.expected ? 'yes' : 'no'}**. Jev identified this passage as contributing to this finding in context.\n\n${quoted(finding.text)}\n\n[Source lines ${finding.line}–${finding.endLine}](${sourceLink(repo, sha, finding)})\n\n${finding.contextTruncated ? 'Localization used cropped context. ' : ''}This is a probabilistic finding, not verified ground truth. Review the surrounding instructions and any intentional override before changing it.`;
+  return `**Jev: ${plain(finding.rule)}** — possible rule violation (localization probability ${finding.probability.toFixed(2)}).\n\nRule: ${plain(finding.question)}\n\nRequired answer: **${finding.expected ? 'yes' : 'no'}**. Jev identified this passage as contributing to the failed check in context.\n\n${quoted(finding.text)}\n\n[Source lines ${finding.line}–${finding.endLine}](${sourceLink(repo, sha, finding)})\n\n${finding.contextTruncated ? 'Localization used cropped context. ' : ''}This is a probabilistic finding, not verified ground truth. Review the surrounding instructions and any intentional override before changing it.`;
 }
 
 function reviewClient({ event, eventName, repo, token }, { fetcher = fetch } = {}) {

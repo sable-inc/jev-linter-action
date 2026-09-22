@@ -7068,12 +7068,10 @@ function validate(config) {
       throw new Error(`${suite.name}: questions must contain 1–64 entries`);
     const ids = new Set;
     for (const q of suite.questions) {
-      keys(q, ["id", "question", "expect", "minProbability", "advisory"], "question");
+      keys(q, ["id", "question", "expect", "minProbability"], "question");
       if (typeof q.id !== "string" || !/^[a-z][a-z0-9_]{0,63}$/.test(q.id) || ids.has(q.id))
         throw new Error("Question IDs must be unique snake_case identifiers");
       ids.add(q.id);
-      if (q.advisory !== undefined && typeof q.advisory !== "boolean")
-        throw new Error(`${q.id}: advisory must be a boolean`);
       if (typeof q.question !== "string" || !q.question.trim() || typeof q.expect !== "boolean")
         throw new Error(`${q.id}: question and boolean expect are required`);
       if (!Number.isFinite(q.minProbability) || q.minProbability <= 0.5 || q.minProbability > 1)
@@ -7151,7 +7149,7 @@ async function evaluate(suite, files, model, apiKey, { fetcher = fetch, sleep = 
     if (answer?.type !== "noul" || !Number.isFinite(answer.noul) || answer.noul < 0 || answer.noul > 1)
       throw new Error(`Invalid or missing TypeSafe answer: ${q.id}`);
     const probability = q.expect ? answer.noul : 1 - answer.noul;
-    return { suite: suite.name, ...evidence, id: q.id, question: q.question, expected: q.expect, advisory: q.advisory === true, yesProbability: answer.noul, probability, minProbability: q.minProbability, passed: probability >= q.minProbability, model: payload.model ?? model };
+    return { suite: suite.name, ...evidence, id: q.id, question: q.question, expected: q.expect, yesProbability: answer.noul, probability, minProbability: q.minProbability, passed: probability >= q.minProbability, model: payload.model ?? model };
   });
 }
 async function lint(config, root, apiKey, deps) {
@@ -7171,7 +7169,7 @@ async function lint(config, root, apiKey, deps) {
     const batch = await Promise.all(jobs.slice(offset, offset + 3).map((j) => evaluate(j.suite, j.files, config.model, apiKey, deps, j.review)));
     results.push(...batch.flat());
   }
-  return { passed: results.every((r) => r.passed || r.advisory), split: jobs.some((job) => job.review.split), requests: jobs.length, results };
+  return { passed: results.every((r) => r.passed), split: jobs.some((job) => job.review.split), requests: jobs.length, results };
 }
 
 // src/inputs.mjs
@@ -7484,7 +7482,6 @@ ${content}`);
         rule: failure.id,
         question: failure.question,
         expected: failure.expected,
-        advisory: failure.advisory === true,
         ...unit,
         probability: answer.probability,
         contextTruncated: job.contextTruncated
@@ -7522,11 +7519,11 @@ function rightLines(patch = "") {
   return result;
 }
 function findingBody(finding, repo, sha) {
-  return `**Jev: ${plain(finding.rule)}** — ${finding.advisory ? "advisory suggestion (does not block CI)" : "possible rule violation"} (localization probability ${finding.probability.toFixed(2)}).
+  return `**Jev: ${plain(finding.rule)}** — possible rule violation (localization probability ${finding.probability.toFixed(2)}).
 
 Rule: ${plain(finding.question)}
 
-Required answer: **${finding.expected ? "yes" : "no"}**. Jev identified this passage as contributing to this finding in context.
+Required answer: **${finding.expected ? "yes" : "no"}**. Jev identified this passage as contributing to the failed check in context.
 
 ${quoted(finding.text)}
 
@@ -7671,7 +7668,7 @@ function mergeReports(files, source) {
     if (!Array.isArray(report.locations.findings))
       throw new Error("Invalid saved source findings");
     for (const finding of report.locations.findings) {
-      if (typeof finding.path !== "string" || !finding.path || finding.path.startsWith("/") || finding.path.split(/[\\/]/).includes("..") || !Number.isInteger(finding.line) || finding.line < 1 || !Number.isInteger(finding.endLine) || finding.endLine < finding.line || typeof finding.text !== "string" || !finding.text || finding.text.length > 1800 || finding.advisory !== undefined && typeof finding.advisory !== "boolean" || typeof finding.rule !== "string" || typeof finding.question !== "string" || typeof finding.expected !== "boolean" || !Number.isFinite(finding.probability) || finding.probability < 0.8 || finding.probability > 1)
+      if (typeof finding.path !== "string" || !finding.path || finding.path.startsWith("/") || finding.path.split(/[\\/]/).includes("..") || !Number.isInteger(finding.line) || finding.line < 1 || !Number.isInteger(finding.endLine) || finding.endLine < finding.line || typeof finding.text !== "string" || !finding.text || finding.text.length > 1800 || typeof finding.rule !== "string" || typeof finding.question !== "string" || typeof finding.expected !== "boolean" || !Number.isFinite(finding.probability) || finding.probability < 0.8 || finding.probability > 1)
         throw new Error("Invalid saved source finding");
       const id = findingFingerprint(finding);
       if (!findings.has(id))
@@ -7730,16 +7727,16 @@ async function main() {
   let extensionFailed = false;
   if (options.enabled) {
     try {
-      const priority = process.env["INPUT_GITHUB-TOKEN"] && report.results.some((r) => !r.passed) ? await reviewDiff({ event, eventName: process.env.GITHUB_EVENT_NAME, repo: process.env.GITHUB_REPOSITORY, token: process.env["INPUT_GITHUB-TOKEN"] }) : new Map;
+      const priority = process.env["INPUT_GITHUB-TOKEN"] && !report.passed ? await reviewDiff({ event, eventName: process.env.GITHUB_EVENT_NAME, repo: process.env.GITHUB_REPOSITORY, token: process.env["INPUT_GITHUB-TOKEN"] }) : new Map;
       report.locations = await locate(report, root, { ...options, model: config.model, apiKey, priority });
       for (const finding of report.locations.findings) {
-        const message = `${finding.advisory ? "Advisory" : "Possible"} ${finding.rule} finding: ${finding.question} Required answer: ${finding.expected ? "yes" : "no"}. Jev localized this passage with probability ${finding.probability.toFixed(2)}. Review it in context.`;
+        const message = `Possible ${finding.rule} violation: ${finding.question} Required answer: ${finding.expected ? "yes" : "no"}. Jev localized this passage with probability ${finding.probability.toFixed(2)}. Review it in context.`;
         if (process.env.GITHUB_ACTIONS === "true")
-          console.log(`::${finding.advisory ? "warning" : "error"} file=${property(finding.path)},line=${finding.line},endLine=${finding.endLine},title=${property(`Jev: ${finding.rule}`)}::${escape(message)}`);
+          console.log(`::error file=${property(finding.path)},line=${finding.line},endLine=${finding.endLine},title=${property(`Jev: ${finding.rule}`)}::${escape(message)}`);
         else
           console.log(`${finding.path}:${finding.line}-${finding.endLine} ${escape(message)}`);
       }
-      if (options.post && report.locations.findings.length > 0) {
+      if (options.post && !report.passed) {
         report.locations.publication = await publishLocations(report, {
           event,
           eventName: process.env.GITHUB_EVENT_NAME,
@@ -7764,9 +7761,9 @@ async function main() {
     const batch = result.review.split ? ` / batch ${result.review.batch}/${result.review.batches}` : "";
     const message = `${result.suite}${batch} / ${result.files.join(", ")} / ${result.id}: expected ${result.expected}, probability ${result.probability.toFixed(3)}, required ${result.minProbability}`;
     if (!result.passed && process.env.GITHUB_ACTIONS === "true")
-      console.log(`::${result.advisory ? "warning" : "error"}::${escape(message)}`);
+      console.log(`::error::${escape(message)}`);
     else
-      console.log(`${result.passed ? "PASS" : result.advisory ? "ADVISORY" : "FAIL"} ${escape(message)}`);
+      console.log(`${result.passed ? "PASS" : "FAIL"} ${escape(message)}`);
   }
   console.log(`Report: ${reportPath}`);
   if (process.env.GITHUB_OUTPUT)
@@ -7774,7 +7771,7 @@ async function main() {
 passed=${report.passed}
 `);
   if (process.env.GITHUB_STEP_SUMMARY) {
-    const rows = report.results.map((r) => `| ${markdown(r.suite)} | ${markdown(r.files.join(", "))} | ${markdown(r.id)} | ${r.probability.toFixed(3)} | ${r.minProbability} | ${r.passed ? "Pass" : r.advisory ? "Advisory / review" : "Fail / review"} |`);
+    const rows = report.results.map((r) => `| ${markdown(r.suite)} | ${markdown(r.files.join(", "))} | ${markdown(r.id)} | ${r.probability.toFixed(3)} | ${r.minProbability} | ${r.passed ? "Pass" : "Fail / review"} |`);
     await appendFile2(process.env.GITHUB_STEP_SUMMARY, ["## Jev lint", "", "| Suite | Files | Question | Expected-answer probability | Required | Result |", "| --- | --- | --- | --- | --- | --- |", ...rows, "", `Requests: ${report.requests}. Split review: ${report.split ? "yes — distant batches are not compared together" : "no"}.`, "", "Probabilistic review checks; failures need review. This does not replace behavioral evals or code review.", ""].join(`
 `));
     if (report.locations) {
@@ -7785,7 +7782,7 @@ passed=${report.passed}
         return `- ${location} — **${markdown(f.rule)}**, localization probability ${f.probability.toFixed(2)}${f.contextTruncated ? " (cropped context)" : ""}`;
       });
       await appendFile2(process.env.GITHUB_STEP_SUMMARY, [`
-## Source findings`, "", ...lines, "", `${locations.requests} localization requests; ${locations.omittedCandidates} candidate passages omitted by the request limit; ${locations.unlocatedGroups} contexts had no unambiguous source match. Unlocalized blocking checks still fail; advisory findings never block CI.`, "", "Locations are source-verified probabilistic findings, not ground truth. Exact passages are in the JSON report.", ""].join(`
+## Source findings`, "", ...lines, "", `${locations.requests} localization requests; ${locations.omittedCandidates} candidate passages omitted by the request limit; ${locations.unlocatedGroups} contexts had no unambiguous source match. Unlocalized checks still fail.`, "", "Locations are source-verified probabilistic findings, not ground truth. Exact passages are in the JSON report.", ""].join(`
 `));
     }
   }

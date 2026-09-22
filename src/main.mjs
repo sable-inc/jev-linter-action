@@ -23,14 +23,14 @@ async function main() {
   let extensionFailed = false;
   if (options.enabled) {
     try {
-      const priority = process.env['INPUT_GITHUB-TOKEN'] && report.results.some(r => !r.passed) ? await reviewDiff({ event, eventName: process.env.GITHUB_EVENT_NAME, repo: process.env.GITHUB_REPOSITORY, token: process.env['INPUT_GITHUB-TOKEN'] }) : new Map();
+      const priority = process.env['INPUT_GITHUB-TOKEN'] && !report.passed ? await reviewDiff({ event, eventName: process.env.GITHUB_EVENT_NAME, repo: process.env.GITHUB_REPOSITORY, token: process.env['INPUT_GITHUB-TOKEN'] }) : new Map();
       report.locations = await locate(report, root, { ...options, model: config.model, apiKey, priority });
       for (const finding of report.locations.findings) {
-        const message = `${finding.advisory ? 'Advisory' : 'Possible'} ${finding.rule} finding: ${finding.question} Required answer: ${finding.expected ? 'yes' : 'no'}. Jev localized this passage with probability ${finding.probability.toFixed(2)}. Review it in context.`;
-        if (process.env.GITHUB_ACTIONS === 'true') console.log(`::${finding.advisory ? 'warning' : 'error'} file=${property(finding.path)},line=${finding.line},endLine=${finding.endLine},title=${property(`Jev: ${finding.rule}`)}::${escape(message)}`);
+        const message = `Possible ${finding.rule} violation: ${finding.question} Required answer: ${finding.expected ? 'yes' : 'no'}. Jev localized this passage with probability ${finding.probability.toFixed(2)}. Review it in context.`;
+        if (process.env.GITHUB_ACTIONS === 'true') console.log(`::error file=${property(finding.path)},line=${finding.line},endLine=${finding.endLine},title=${property(`Jev: ${finding.rule}`)}::${escape(message)}`);
         else console.log(`${finding.path}:${finding.line}-${finding.endLine} ${escape(message)}`);
       }
-      if (options.post && report.locations.findings.length > 0) {
+      if (options.post && !report.passed) {
         report.locations.publication = await publishLocations(report, { event, eventName: process.env.GITHUB_EVENT_NAME, repo: process.env.GITHUB_REPOSITORY,
           token: process.env['INPUT_GITHUB-TOKEN'], reviewId: process.env['INPUT_REVIEW-ID'], maxComments: options.maxComments });
       }
@@ -46,13 +46,13 @@ async function main() {
   for (const result of report.results) {
     const batch = result.review.split ? ` / batch ${result.review.batch}/${result.review.batches}` : '';
     const message = `${result.suite}${batch} / ${result.files.join(', ')} / ${result.id}: expected ${result.expected}, probability ${result.probability.toFixed(3)}, required ${result.minProbability}`;
-    if (!result.passed && process.env.GITHUB_ACTIONS === 'true') console.log(`::${result.advisory ? 'warning' : 'error'}::${escape(message)}`);
-    else console.log(`${result.passed ? 'PASS' : result.advisory ? 'ADVISORY' : 'FAIL'} ${escape(message)}`);
+    if (!result.passed && process.env.GITHUB_ACTIONS === 'true') console.log(`::error::${escape(message)}`);
+    else console.log(`${result.passed ? 'PASS' : 'FAIL'} ${escape(message)}`);
   }
   console.log(`Report: ${reportPath}`);
   if (process.env.GITHUB_OUTPUT) await appendFile(process.env.GITHUB_OUTPUT, `report=${reportPath}\npassed=${report.passed}\n`);
   if (process.env.GITHUB_STEP_SUMMARY) {
-    const rows = report.results.map(r => `| ${markdown(r.suite)} | ${markdown(r.files.join(', '))} | ${markdown(r.id)} | ${r.probability.toFixed(3)} | ${r.minProbability} | ${r.passed ? 'Pass' : r.advisory ? 'Advisory / review' : 'Fail / review'} |`);
+    const rows = report.results.map(r => `| ${markdown(r.suite)} | ${markdown(r.files.join(', '))} | ${markdown(r.id)} | ${r.probability.toFixed(3)} | ${r.minProbability} | ${r.passed ? 'Pass' : 'Fail / review'} |`);
     await appendFile(process.env.GITHUB_STEP_SUMMARY, ['## Jev lint', '', '| Suite | Files | Question | Expected-answer probability | Required | Result |', '| --- | --- | --- | --- | --- | --- |', ...rows, '', `Requests: ${report.requests}. Split review: ${report.split ? 'yes — distant batches are not compared together' : 'no'}.`, '', 'Probabilistic review checks; failures need review. This does not replace behavioral evals or code review.', ''].join('\n'));
     if (report.locations) {
       const locations = report.locations;
@@ -61,7 +61,7 @@ async function main() {
         const location = report.source.repository && report.source.commit ? `[${label}](${sourceLink(report.source.repository, report.source.commit, f)})` : label;
         return `- ${location} — **${markdown(f.rule)}**, localization probability ${f.probability.toFixed(2)}${f.contextTruncated ? ' (cropped context)' : ''}`;
       });
-      await appendFile(process.env.GITHUB_STEP_SUMMARY, ['\n## Source findings', '', ...lines, '', `${locations.requests} localization requests; ${locations.omittedCandidates} candidate passages omitted by the request limit; ${locations.unlocatedGroups} contexts had no unambiguous source match. Unlocalized blocking checks still fail; advisory findings never block CI.`, '', 'Locations are source-verified probabilistic findings, not ground truth. Exact passages are in the JSON report.', ''].join('\n'));
+      await appendFile(process.env.GITHUB_STEP_SUMMARY, ['\n## Source findings', '', ...lines, '', `${locations.requests} localization requests; ${locations.omittedCandidates} candidate passages omitted by the request limit; ${locations.unlocatedGroups} contexts had no unambiguous source match. Unlocalized checks still fail.`, '', 'Locations are source-verified probabilistic findings, not ground truth. Exact passages are in the JSON report.', ''].join('\n'));
     }
   }
   process.exitCode = extensionFailed ? 2 : report.passed ? 0 : 1;
