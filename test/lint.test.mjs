@@ -75,3 +75,11 @@ test('collection preserves large artifacts for request planning without truncati
 test('invalid provider JSON cannot disclose reflected target content', async () => {
   await assert.rejects(evaluate(suite, [], 'jev-latest', 'key', {fetcher: async () => new Response('private target content')}), /^Error: TypeSafe returned invalid JSON$/);
 });
+
+test('collection rejects invalid byte limits before touching files', async () => {
+  for (const key of ['maxFileBytes','maxTotalBytes']) {
+    for (const value of [NaN,Infinity,0,-1,0.5]) {
+      await assert.rejects(collect('/absent',['*.md'],false,{[key]:value}),/positive safe integers/);
+    }
+  }
+});

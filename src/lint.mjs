@@ -1,5 +1,6 @@
 import { glob, readFile, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { createHash } from 'node:crypto';
 
 import { requestFor, assertBudget, planRequests, maxRequests, budgetOf } from './requests.mjs';
 
@@ -40,7 +41,8 @@ export async function inside(root, file) {
   return actual;
 }
 
-export async function collect(root, patterns, perFile = false) {
+export async function collect(root, patterns, perFile = false, { allowUnmatched = false, maxFileBytes = limit, maxTotalBytes = 16 * 1024 * 1024 } = {}) {
+  if (![maxFileBytes, maxTotalBytes].every(value => Number.isSafeInteger(value) && value > 0)) throw new Error('File byte limits must be positive safe integers');
   const files = new Map();
   let bytes = 0;
   for (const pattern of patterns) {
@@ -52,12 +54,12 @@ export async function collect(root, patterns, perFile = false) {
       matched = true;
       if (files.has(actual)) continue;
       bytes += info.size;
-      if (info.size > limit || bytes > 16 * 1024 * 1024 || files.size >= 128) throw new Error('Target set exceeds limits (2 MiB per file, 16 MiB per suite, 128 files); narrow the suite');
+      if (info.size > maxFileBytes || bytes > maxTotalBytes || files.size >= 128) throw new Error(`Target set exceeds limits (${maxFileBytes} bytes per file, ${maxTotalBytes} bytes total, 128 files); narrow the suite`);
       const content = await readFile(actual, 'utf8');
       if (content.includes('\0')) throw new Error(`Target is binary: ${path}`);
       files.set(actual, { path: relative(root, resolve(root, path)).split(sep).join('/'), content });
     }
-    if (!matched) throw new Error(`No files matched ${pattern}`);
+    if (!matched && !allowUnmatched) throw new Error(`No files matched ${pattern}`);
   }
   return [...files.values()].sort((a, b) => a.path.localeCompare(b.path));
 }
@@ -80,17 +82,21 @@ export async function evaluate(suite, files, model, apiKey, { fetcher = fetch, s
   let payload;
   try { payload = await response.json(); } catch { throw new Error("TypeSafe returned invalid JSON"); }
   if (!object(payload?.answers)) throw new Error('TypeSafe returned no answer map');
+  const evidence = {
+    files: [...new Set(files.map(f => f.path))],
+    excerpts: files.map(({ content, ...source }) => ({ ...source, sha256: createHash('sha256').update(content).digest('hex') })),
+    review: request.state.review, budget: budgetOf(request),
+  };
   return suite.questions.map(q => {
     const answer = payload.answers[q.id];
     if (answer?.type !== 'noul' || !Number.isFinite(answer.noul) || answer.noul < 0 || answer.noul > 1) throw new Error(`Invalid or missing TypeSafe answer: ${q.id}`);
     const probability = q.expect ? answer.noul : 1 - answer.noul;
-    return { suite: suite.name, files: [...new Set(files.map(f => f.path))], excerpts: files.map(({ content, ...source }) => source), review: request.state.review, budget: budgetOf(request), id: q.id, question: q.question, expected: q.expect, yesProbability: answer.noul, probability, minProbability: q.minProbability, passed: probability >= q.minProbability, model: payload.model ?? model };
+    return { suite: suite.name, ...evidence, id: q.id, question: q.question, expected: q.expect, yesProbability: answer.noul, probability, minProbability: q.minProbability, passed: probability >= q.minProbability, model: payload.model ?? model };
   });
 }
 
-export async function lint(config, root, apiKey, deps) {
+export async function planLint(config, root) {
   validate(config);
-  if (typeof apiKey !== 'string' || !apiKey.trim()) throw new Error('TYPESAFE_API_KEY / api-key is required');
   // Read and validate every target before making any paid requests.
   const jobs = [];
   for (const suite of config.suites) {
@@ -98,6 +104,12 @@ export async function lint(config, root, apiKey, deps) {
     for (const planned of planRequests(suite, files, config.model)) jobs.push({ suite, ...planned });
     if (jobs.length > maxRequests) throw new Error(`Review exceeds ${maxRequests} requests; narrow the target set`);
   }
+  return jobs;
+}
+
+export async function lint(config, root, apiKey, deps) {
+  if (typeof apiKey !== "string" || !apiKey.trim()) throw new Error("TYPESAFE_API_KEY / api-key is required");
+  const jobs = await planLint(config, root);
   const results = [];
   // Bounded requests avoid surprising fan-out against a repository of agents.
   for (let offset = 0; offset < jobs.length; offset += 3) {
