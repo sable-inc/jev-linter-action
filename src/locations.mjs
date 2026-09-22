@@ -51,8 +51,13 @@ export function addedPassages(files, diff) {
     let start = 0;
     while (start < lines.length) {
       if (!added.has(start + 1)) { start++; continue; }
-      let end = start, length = 0;
-      while (end < lines.length && added.has(end + 1) && length + lines[end].length <= 1800) length += lines[end++].length + 1;
+      let end = start, length = 0, hasText = false;
+      while (end < lines.length && added.has(end + 1) && length + lines[end].length <= 1800) {
+        const blank = !lines[end].trim();
+        length += lines[end++].length + 1;
+        if (blank && hasText) break; // Preserve paragraph-sized findings while covering the separator.
+        hasText ||= !blank;
+      }
       if (end === start) throw new Error(`Added line exceeds the 1800-character source passage limit: ${file.path}:${start + 1}`);
       units.push({ path: file.path, line: start + 1, endLine: end, text: lines.slice(start, end).join('\n').trim() });
       start = end;

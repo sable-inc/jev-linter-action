@@ -82,7 +82,7 @@ test('isolated whitespace additions remain visible incomplete coverage', async t
 });
 test('blank lines within a textual addition stay in the reviewed target', () => {
   const units = addedPassages([{path:'a.md',content:'First\n\nSecond'}],new Map([['a.md',new Set([1,2,3])]]));
-  assert.deepEqual(units,[{path:'a.md',line:1,endLine:3,text:'First\n\nSecond'}]);
+  assert.deepEqual(units,[{path:'a.md',line:1,endLine:2,text:'First'},{path:'a.md',line:3,endLine:3,text:'Second'}]);
 });
 test('oversized added lines fail explicitly before review', () => {
   assert.throws(()=>addedPassages([{path:'a.md',content:'x'.repeat(1801)}],new Map([['a.md',new Set([1])]])),/1800-character/);
