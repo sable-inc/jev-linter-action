@@ -115,7 +115,7 @@ passages against the failed rules per request and rotating across failed context
 in that bounded context. These are probabilistic findings, not ground truth or generated fixes.
 
 Annotations work without PR-write access. With a GitHub token having `pull-requests: read`,
-localization prioritizes passages in the diff. With `post-comments`, verified findings on diff
+localization prioritizes passages in the diff. With `post-comments`, verified findings on added
 lines are submitted together in **one PR review**, capped by `max-comments`. No conversation
 summaries, empty reviews, or comments about missing findings are posted. Unchanged-line findings,
 unmapped passages, and coverage statistics stay in check summaries and report artifacts.
@@ -199,3 +199,22 @@ Local builds enforce this pin and CI reads the same file. Commit the rebuilt
 `dist/` files with source changes; CI prints any bundle drift and fails with rebuild instructions.
 
 Exit codes: 0 passed, 1 review check failed, 2 configuration/provider failure. Tests use mocked HTTP responses and need no key. MIT licensed.
+
+### PR additions as the review target
+
+Set `changed-lines-only: true` with `locate: true`, `source-glob`, and `github-token`
+on a same-repository `pull_request` event. Keep `glob` pointed at the full built artifact:
+it supplies context. Every rule is asked about actual added source lines, including short
+additions, rather than about old problems in neighboring unchanged text. This mode does
+not first gate on whole-file judgments. A finding requires at least 0.80 probability of the
+opposite of the rule's expected answer. The usual `minProbability` pass gate still applies
+to whole-input mode and fixtures. Absence of a finding is not proof of correctness.
+
+Only additions can receive inline comments in either mode; diff context and deleted lines
+are never anchors. A changed-line review returns exit 1 for findings, exit 2 for provider
+errors, unavailable PR patches or exhausted request limits, and exit 0 otherwise. Source coordinates come directly from the added lines, including template directives,
+and are verified again before publishing. Built excerpts supply context. Reports disclose
+omitted targets and cropped context. Deletion-only regressions are not covered, and a
+finding does not prove that the edit introduced a new behavior relative to the base commit.
+
+Manual full audits and synthetic calibration fixtures should leave this option disabled.

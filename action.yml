@@ -21,6 +21,9 @@ inputs:
   locate:
     description: Ask Jev to identify authored passages contributing to failed rules. Leaves the original verdict unchanged.
     default: 'false'
+  changed-lines-only:
+    description: Review only PR additions against every rule, using target files as context. Requires locate and github-token. Findings require 0.8 violation probability; unavailable patches or exhausted budgets fail as incomplete. Deletion-only regressions are not covered.
+    default: 'false'
   source-glob:
     description: Newline-separated globs of authored source files for line mapping. Optional patterns may match no files; the total set must not be empty.
   locate-max-requests:

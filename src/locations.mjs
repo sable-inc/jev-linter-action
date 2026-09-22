@@ -13,13 +13,15 @@ export function locationOptions(env) {
   };
   const enabled = boolean('INPUT_LOCATE');
   const post = boolean('INPUT_POST-COMMENTS');
+  const changedOnly = boolean('INPUT_CHANGED-LINES-ONLY');
+  if (changedOnly && !enabled) throw new Error('changed-lines-only requires locate');
   const sourcePatterns = (env['INPUT_SOURCE-GLOB'] ?? '').split(/\r?\n/).map(p => p.trim()).filter(Boolean);
   const maxRequests = Number(env['INPUT_LOCATE-MAX-REQUESTS'] || 32);
   const maxComments = Number(env['INPUT_MAX-COMMENTS'] || 5);
   if (post && !enabled) throw new Error('post-comments requires locate');
   if (enabled && (!sourcePatterns.length || !Number.isInteger(maxRequests) || maxRequests < 1 || maxRequests > 512)) throw new Error('locate requires source-glob and locate-max-requests of 1–512');
   if (post && (!env['INPUT_GITHUB-TOKEN'] || !env['INPUT_REVIEW-ID']?.trim() || !Number.isInteger(maxComments) || maxComments < 0 || maxComments > 20)) throw new Error('post-comments requires github-token, review-id, and max-comments of 0–20');
-  return { enabled, post, sourcePatterns, maxRequests, maxComments };
+  return { enabled, post, sourcePatterns, maxRequests, maxComments, changedOnly };
 }
 
 /** Coordinates always come from source text, never from a model. */
@@ -35,6 +37,26 @@ export function paragraphs(file) {
     const text = lines.slice(start, end).join('\n').trim();
     if (text.length >= 32) units.push({ path: file.path, line: start + 1, endLine: end, text });
     start = end;
+  }
+  return units;
+}
+
+/** Only added lines are targets; neighboring unchanged lines remain context. */
+export function addedPassages(files, diff) {
+  const units = [];
+  for (const file of files) {
+    const lines = file.content.split(/\r?\n/);
+    if (diff.has(file.path) && diff.get(file.path) === null) throw new Error(`PR patch unavailable for ${file.path}; cannot determine added lines`);
+    const added = diff.get(file.path) ?? new Set();
+    let start = 0;
+    while (start < lines.length) {
+      if (!added.has(start + 1) || !lines[start].trim()) { start++; continue; }
+      let end = start, length = 0;
+      while (end < lines.length && added.has(end + 1) && lines[end].trim() && length + lines[end].length <= 1800) length += lines[end++].length + 1;
+      if (end === start) throw new Error(`Added line exceeds the 1800-character source passage limit: ${file.path}:${start + 1}`);
+      units.push({ path: file.path, line: start + 1, endLine: end, text: lines.slice(start, end).join('\n').trim() });
+      start = end;
+    }
   }
   return units;
 }
@@ -86,10 +108,22 @@ export function focusedRequest(context, unit, failures, model) {
   return focusedBatchRequest(context, [unit], failures, model);
 }
 
-export function focusedBatchRequest(context, units, failures, model) {
+export function focusedBatchRequest(context, units, failures, model, explicitTargets = false) {
+  const sourceOffsets = [];
+  if (explicitTargets) {
+    let targets = '';
+    for (const unit of units) {
+      targets += `Source addition (${unit.path}:${unit.line}–${unit.endLine}):\n`;
+      const start = targets.length;
+      targets += unit.text;
+      sourceOffsets.push({ start, end: targets.length });
+      targets += '\n\n';
+    }
+    context = targets + 'Built agent context (not a review target):\n' + context;
+  }
   const chars = Array.from(context);
   const targets = units.map((unit, index) => {
-    const found = occurrence(context, unit.text);
+    const found = explicitTargets ? sourceOffsets[index] : occurrence(context, unit.text);
     if (!found) throw new Error('Source passage does not map uniquely to the reviewed excerpt');
     return { index, start: Array.from(context.slice(0, found.start)).length, end: Array.from(context.slice(0, found.end)).length };
   }).sort((a, b) => a.start - b.start);
@@ -116,12 +150,14 @@ export function focusedBatchRequest(context, units, failures, model) {
   return { suite, files: filesAt(low), contextTruncated: low < start || low < chars.length - end };
 }
 
-export async function locate(report, root, { sourcePatterns, model, apiKey, maxRequests = 32, priority = new Map() }, deps = {}) {
+export async function locate(report, root, { sourcePatterns, model, apiKey, maxRequests = 32, priority = new Map(), changedOnly = false }, deps = {}) {
   if (!Number.isInteger(maxRequests) || maxRequests < 1 || maxRequests > 512) throw new Error('locate-max-requests must be 1–512');
   const output = { findings: [], assessments: [], requests: 0, candidatePassages: 0, unlocatedGroups: 0, omittedCandidates: 0 };
   const failed = report.results.filter(result => !result.passed);
   if (!failed.length) return output;
   const sources = await collectSources(root, sourcePatterns);
+  const added = changedOnly ? addedPassages(sources, priority) : [];
+  if (added.some(unit => unit.text.includes('JEV_TARGET_'))) throw new Error('Authored text collides with review markers');
   const groups = new Map();
   for (const failure of failed) {
     const key = JSON.stringify([failure.suite, failure.excerpts]);
@@ -143,11 +179,16 @@ export async function locate(report, root, { sourcePatterns, model, apiKey, maxR
     }
     const context = parts.join('\n\n');
     // Static marker collision must not let authored text select a different target.
-    if (context.includes('JEV_TARGET_')) { output.unlocatedGroups++; continue; }
+    if (context.includes('JEV_TARGET_')) {
+      if (changedOnly) throw new Error('Authored text collides with review markers');
+      output.unlocatedGroups++; continue;
+    }
     const rank = unit => [...(priority.get(unit.path) ?? [])].some(line => line >= unit.line && line <= unit.endLine) ? 0 : 1;
-    const units = candidates(sources, context).sort((a, b) => rank(a) - rank(b));
+    const units = changedOnly
+      ? added
+      : candidates(sources, context).sort((a, b) => rank(a) - rank(b));
     output.candidatePassages += units.length;
-    if (!units.length) output.unlocatedGroups++;
+    if (!units.length && !changedOnly) output.unlocatedGroups++;
     queues.push({ units, context, failures, offset: 0 });
   }
   // Batch several candidates over shared context; rotate so one long file cannot consume the budget.
@@ -158,7 +199,7 @@ export async function locate(report, root, { sourcePatterns, model, apiKey, maxR
       if (offset >= units.length || jobs.length >= maxRequests) continue;
       let count = Math.min(4, Math.floor(64 / failures.length), units.length - offset), request;
       for (; count > 0; count--) {
-        try { request = focusedBatchRequest(context, units.slice(offset, offset + count), failures, model); break; }
+        try { request = focusedBatchRequest(context, units.slice(offset, offset + count), failures, model, changedOnly); break; }
         catch (error) { if (count === 1) throw error; }
       }
       jobs.push({ units: units.slice(offset, offset + count), failures, ...request });
@@ -168,6 +209,7 @@ export async function locate(report, root, { sourcePatterns, model, apiKey, maxR
     if (!added) break;
   }
   output.omittedCandidates = output.candidatePassages - jobs.reduce((count, job) => count + job.units.length, 0);
+  if (changedOnly) output.unmappedAdditions = [];
   const seen = new Set();
   for (const job of jobs) {
     const answers = await evaluate(job.suite, job.files, model, apiKey, deps);

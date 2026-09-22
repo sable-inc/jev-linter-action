@@ -94,9 +94,8 @@ export async function evaluate(suite, files, model, apiKey, { fetcher = fetch, s
   });
 }
 
-export async function lint(config, root, apiKey, deps) {
+export async function planLint(config, root) {
   validate(config);
-  if (typeof apiKey !== 'string' || !apiKey.trim()) throw new Error('TYPESAFE_API_KEY / api-key is required');
   // Read and validate every target before making any paid requests.
   const jobs = [];
   for (const suite of config.suites) {
@@ -104,6 +103,12 @@ export async function lint(config, root, apiKey, deps) {
     for (const planned of planRequests(suite, files, config.model)) jobs.push({ suite, ...planned });
     if (jobs.length > maxRequests) throw new Error(`Review exceeds ${maxRequests} requests; narrow the target set`);
   }
+  return jobs;
+}
+
+export async function lint(config, root, apiKey, deps) {
+  if (typeof apiKey !== "string" || !apiKey.trim()) throw new Error("TYPESAFE_API_KEY / api-key is required");
+  const jobs = await planLint(config, root);
   const results = [];
   // Bounded requests avoid surprising fan-out against a repository of agents.
   for (let offset = 0; offset < jobs.length; offset += 3) {

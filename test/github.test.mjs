@@ -30,8 +30,8 @@ function server({ patch = '@@ -1,3 +1,3 @@\n # Demo\n \n+' + text, content = '# 
   } };
 }
 
-test('diff parser locates right-side context/additions without treating deletions as anchors', () => {
-  assert.deepEqual([...rightLines('@@ -10,3 +10,3 @@\n keep\n-old\n+new\n last')], [10, 11, 12]);
+test('diff parser locates only additions, excluding context and deletions', () => {
+  assert.deepEqual([...rightLines('@@ -10,3 +10,3 @@\n keep\n-old\n+new\n last')], [11]);
 });
 test('posts source-verified inline comments and deduplicates a retry', async () => {
   const mock = server();
@@ -124,4 +124,12 @@ test('the same finding is not reposted after an unrelated commit or a shifted li
   const result = await publishLocations(nextReport, nextOptions, next);
   assert.equal(result.duplicates, 1);
   assert.equal(next.writes.length, 0);
+});
+
+
+test('unchanged context beside an addition never receives a comment', async () => {
+  const mock = server({ patch: '@@ -1,3 +1,4 @@\n # Demo\n \n ' + text + '\n+New unrelated sentence.' });
+  const result = await publishLocations(report, options, mock);
+  assert.equal(result.outsideDiff, 1);
+  assert.equal(mock.writes.length, 0);
 });
