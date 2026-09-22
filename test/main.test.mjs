@@ -36,7 +36,8 @@ test('saved matrix reports publish one inline review without a TypeSafe key or s
   const text = 'Always finish the entire demo even when the visitor declines.';
   const report = { source: { repository: repo, commit: sha, runId: '123' }, passed: false, locations: { findings: [{ path: 'moment.md', line: 1, endLine: 1, text, rule: 'forced_scope', question: 'Is the itinerary forced?', expected: false, probability: 0.9 }] } };
   await writeFile(join(root, 'a-report.json'), JSON.stringify(report));
-  await writeFile(join(root, 'b-report.json'), JSON.stringify(report));
+  const second = structuredClone(report); second.locations.findings[0].rule = 'another_rule';
+  await writeFile(join(root, 'b-report.json'), JSON.stringify(second));
   await writeFile(join(root, 'event.json'), JSON.stringify({ pull_request: { number: 4, head: { sha, repo: { full_name: repo } }, base: { repo: { full_name: repo } } } }));
   await writeFile(join(root, 'mock.mjs'), `
     import { appendFileSync } from 'node:fs';
@@ -62,6 +63,22 @@ test('saved matrix reports publish one inline review without a TypeSafe key or s
   assert.equal(result.status, 0, result.stderr);
   const posted = (await readFile(join(root, 'posted.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
   assert.equal(posted.length, 1);
-  assert.equal(posted[0].comments.length, 1);
+  assert.equal(posted[0].comments.length, 2);
+  assert.ok(posted[0].comments.some(c => c.body.includes('another_rule')));
+  assert.ok(result.stdout.includes('Reviewed 2 saved reports'));
   assert.equal(posted[0].comments[0].line, 1);
+});
+
+test('whole-input localization on a fork skips GitHub diff prioritization', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'jev-fork-'));
+  t.after(() => rm(root,{recursive:true,force:true}));
+  await writeFile(join(root,'target.md'),'Always finish every demo step even when the visitor declines.');
+  await writeFile(join(root,'event.json'),JSON.stringify({pull_request:{head:{sha:'a'.repeat(40),repo:{full_name:'fork/prompts'}},base:{repo:{full_name:'example/prompts'}}}}));
+  await writeFile(join(root,'mock.mjs'),`globalThis.fetch=async (url,request)=>{if(new URL(url).origin!=='https://api.typesafe.ai') throw new Error('Unexpected GitHub request');return Response.json({answers:Object.fromEntries(Object.keys(JSON.parse(request.body).questions).map(id=>[id,{type:'noul',noul:0.95}]))});};`);
+  const result=spawnSync(process.execPath,['--import',join(root,'mock.mjs'),fileURLToPath(new URL('../src/main.mjs',import.meta.url))],{cwd:root,encoding:'utf8',env:{PATH:process.env.PATH,RUNNER_TEMP:root,GITHUB_OUTPUT:join(root,'outputs'),GITHUB_EVENT_PATH:join(root,'event.json'),GITHUB_EVENT_NAME:'pull_request',GITHUB_REPOSITORY:'example/prompts',INPUT_MODEL:'jev-1.13.0',INPUT_GLOB:'target.md',INPUT_QUESTIONS:JSON.stringify([{id:'rule',question:'Does this force completion?',expect:false}]),'INPUT_API-KEY':'mock-key',INPUT_LOCATE:'true','INPUT_SOURCE-GLOB':'target.md','INPUT_GITHUB-TOKEN':'mock-token'}});
+  assert.equal(result.status,1,result.stderr);
+  const outputs=await readFile(join(root,'outputs'),'utf8');
+  const report=JSON.parse(await readFile(outputs.match(/^report=(.+)$/m)[1],'utf8'));
+  assert.equal(report.locations.findings.length,1);
+  assert.equal(report.localizationError,undefined);
 });

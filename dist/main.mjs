@@ -7088,6 +7088,8 @@ async function inside(root, file) {
   return actual;
 }
 async function collect(root, patterns, perFile = false, { allowUnmatched = false, maxFileBytes = limit, maxTotalBytes = 16 * 1024 * 1024 } = {}) {
+  if (![maxFileBytes, maxTotalBytes].every((value) => Number.isSafeInteger(value) && value > 0))
+    throw new Error("File byte limits must be positive safe integers");
   const files = new Map;
   let bytes2 = 0;
   for (const pattern of patterns) {
@@ -7236,12 +7238,12 @@ function addedPassages(files, diff) {
     const added = diff.get(file.path) ?? new Set;
     let start = 0;
     while (start < lines.length) {
-      if (!added.has(start + 1) || !lines[start].trim()) {
+      if (!added.has(start + 1)) {
         start++;
         continue;
       }
       let end = start, length = 0;
-      while (end < lines.length && added.has(end + 1) && lines[end].trim() && length + lines[end].length <= 1800)
+      while (end < lines.length && added.has(end + 1) && length + lines[end].length <= 1800)
         length += lines[end++].length + 1;
       if (end === start)
         throw new Error(`Added line exceeds the 1800-character source passage limit: ${file.path}:${start + 1}`);
@@ -7358,12 +7360,14 @@ JEV_TARGET_${target.index}_END
 async function locate(report, root, { sourcePatterns, model, apiKey, maxRequests: maxRequests2 = 32, priority = new Map, changedOnly = false }, deps = {}) {
   if (!Number.isInteger(maxRequests2) || maxRequests2 < 1 || maxRequests2 > 512)
     throw new Error("locate-max-requests must be 1–512");
-  const output = { findings: [], assessments: [], requests: 0, candidatePassages: 0, unlocatedGroups: 0, omittedCandidates: 0 };
+  const output = { findings: [], assessments: [], requests: 0, candidatePassages: 0, unlocatedGroups: 0, omittedCandidates: 0, unreviewedWhitespace: [] };
   const failed = report.results.filter((result) => !result.passed);
   if (!failed.length)
     return output;
   const sources = await collectSources(root, sourcePatterns);
-  const added = changedOnly ? addedPassages(sources, priority) : [];
+  const additions = changedOnly ? addedPassages(sources, priority) : [];
+  output.unreviewedWhitespace = additions.filter((unit) => !unit.text).map(({ path, line, endLine }) => ({ path, line, endLine }));
+  const added = additions.filter((unit) => unit.text);
   if (added.some((unit) => unit.text.includes("JEV_TARGET_")))
     throw new Error("Authored text collides with review markers");
   const groups = new Map;
@@ -7429,8 +7433,6 @@ ${content}`);
       break;
   }
   output.omittedCandidates = output.candidatePassages - jobs.reduce((count, job) => count + job.units.length, 0);
-  if (changedOnly)
-    output.unmappedAdditions = [];
   const seen = new Set;
   for (const job of jobs) {
     const answers = await evaluate(job.suite, job.files, model, apiKey, deps);
@@ -7465,16 +7467,19 @@ async function reviewChanges(config, root, options, deps) {
   if (!options.apiKey?.trim())
     throw new Error("TYPESAFE_API_KEY / api-key is required");
   const jobs = await planLint(config, root);
-  const evidence = jobs.flatMap((job) => job.suite.questions.map((q) => ({
-    suite: job.suite.name,
-    id: q.id,
-    question: q.question,
-    expected: q.expect,
-    passed: false,
-    excerpts: job.files.map(({ content, ...source }) => ({ ...source, sha256: digest(content) }))
-  })));
+  const evidence = jobs.flatMap((job) => {
+    const excerpts = job.files.map(({ content, ...source }) => ({ ...source, sha256: digest(content) }));
+    return job.suite.questions.map((q) => ({
+      suite: job.suite.name,
+      id: q.id,
+      question: q.question,
+      expected: q.expect,
+      passed: false,
+      excerpts
+    }));
+  });
   const locations = await locate({ results: evidence }, root, { ...options, model: config.model, changedOnly: true }, deps);
-  const incomplete = locations.omittedCandidates > 0;
+  const incomplete = locations.omittedCandidates > 0 || locations.unreviewedWhitespace.length > 0;
   return {
     scope: "added-lines",
     passed: !incomplete && locations.findings.length === 0,
@@ -7641,6 +7646,7 @@ function reviewClient({ event, eventName, repo, token }, { fetcher = fetch } = {
     const live = await api(`/pulls/${pr.number}`);
     if (live.head?.sha !== pr.head.sha || live.state !== "open")
       throw new Error("PR changed or closed; refusing to publish stale findings");
+    return live;
   };
   const pages = async (path) => {
     const all = [];
@@ -7660,8 +7666,12 @@ async function reviewDiff(options, deps) {
   const client = reviewClient(options, deps);
   if (!client)
     return new Map;
-  await client.current();
+  const live = await client.current();
+  if (live.changed_files > 3000)
+    throw new Error("PR diff exceeds the GitHub 3000-file limit; cannot review complete additions");
   const files = await client.pages(`/pulls/${client.pr.number}/files`);
+  if (Number.isInteger(live.changed_files) && files.length !== live.changed_files)
+    throw new Error("Incomplete PR diff: changed-file count does not match returned files");
   return new Map(files.map((file) => [file.filename, typeof file.patch === "string" || file.changes === 0 ? rightLines(file.patch) : null]));
 }
 async function publishLocations(report, options, deps) {
@@ -7761,7 +7771,7 @@ function mergeReports(files, source) {
   return { passed, locations: { findings: [...findings.values()] } };
 }
 async function publishReports(root, env, event, patterns) {
-  if (["INPUT_CONFIG", "INPUT_MODEL", "INPUT_GLOB", "INPUT_QUESTIONS"].some((key) => env[key]?.trim()) || env.INPUT_LOCATE === "true" || env["INPUT_POST-COMMENTS"] === "true")
+  if (["INPUT_CONFIG", "INPUT_MODEL", "INPUT_GLOB", "INPUT_QUESTIONS"].some((key) => env[key]?.trim()) || env["INPUT_PER-FILE"] && env["INPUT_PER-FILE"] !== "false" || env["INPUT_CHANGED-LINES-ONLY"] === "true" || env.INPUT_LOCATE === "true" || env["INPUT_POST-COMMENTS"] === "true")
     throw new Error("publish-reports cannot be combined with lint or localization inputs");
   if (env.GITHUB_EVENT_NAME !== "pull_request")
     throw new Error("publish-reports requires a pull_request event");
@@ -7812,10 +7822,10 @@ async function main() {
   report.source = { repository: process.env.GITHUB_REPOSITORY, commit: event?.pull_request?.head?.sha || process.env.GITHUB_SHA, runId: process.env.GITHUB_RUN_ID };
   let extensionFailed = report.incomplete === true;
   if (report.incomplete)
-    console.error("::error::Added-line review is incomplete: request budget exhausted. See the saved coverage report.");
+    console.error("::error::Added-line review is incomplete: request budget exhausted or whitespace-only additions need structural review. See the saved coverage report.");
   if (options.enabled) {
     try {
-      const priority2 = !options.changedOnly && process.env["INPUT_GITHUB-TOKEN"] && !report.passed ? await reviewDiff({ event, eventName: process.env.GITHUB_EVENT_NAME, repo: process.env.GITHUB_REPOSITORY, token: process.env["INPUT_GITHUB-TOKEN"] }) : new Map;
+      const priority2 = !options.changedOnly && event?.pull_request?.head?.repo?.full_name === process.env.GITHUB_REPOSITORY && process.env["INPUT_GITHUB-TOKEN"] && !report.passed ? await reviewDiff({ event, eventName: process.env.GITHUB_EVENT_NAME, repo: process.env.GITHUB_REPOSITORY, token: process.env["INPUT_GITHUB-TOKEN"] }) : new Map;
       if (!options.changedOnly)
         report.locations = await locate(report, root, { ...options, model: config.model, apiKey, priority: priority2 });
       for (const finding of report.locations.findings) {
@@ -7863,7 +7873,7 @@ passed=${report.passed}
     if (options.changedOnly) {
       await appendFile2(process.env.GITHUB_STEP_SUMMARY, `## Jev added-line review
 
-${report.locations.assessments.length} rule assessments; ${report.locations.findings.length} findings on added lines. ${report.locations.omittedCandidates} omitted candidates.
+${report.locations.assessments.length} rule assessments; ${report.locations.findings.length} findings on added lines. ${report.locations.omittedCandidates} omitted candidates; ${report.locations.unreviewedWhitespace.length} whitespace-only added passages need structural review.
 
 Only added lines are targets; surrounding built output supplies context. Findings require at least 0.80 violation probability. No findings is not proof of correctness. Deletion-only regressions are outside this check.
 `);
@@ -7880,7 +7890,7 @@ Only added lines are targets; surrounding built output supplies context. Finding
         return `- ${location} — **${markdown(f.rule)}**, localization probability ${f.probability.toFixed(2)}${f.contextTruncated ? " (cropped context)" : ""}`;
       });
       await appendFile2(process.env.GITHUB_STEP_SUMMARY, [`
-## Source findings`, "", ...lines, "", `${locations.requests} localization requests; ${locations.omittedCandidates} candidate passages omitted by the request limit; ${locations.unlocatedGroups} contexts had no unambiguous source match. ${options.changedOnly ? "Omitted additions make the review incomplete." : "Unlocalized checks still fail."}`, "", "Locations are source-verified probabilistic findings, not ground truth. Exact passages are in the JSON report.", ""].join(`
+## Source findings`, "", ...lines, "", `${locations.requests} localization requests; ${locations.omittedCandidates} candidate passages omitted by the request limit; ${locations.unlocatedGroups} contexts had no unambiguous source match. ${options.changedOnly ? "Omitted or whitespace-only additions make the review incomplete." : "Unlocalized checks still fail."}`, "", "Locations are source-verified probabilistic findings, not ground truth. Exact passages are in the JSON report.", ""].join(`
 `));
     }
   }

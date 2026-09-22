@@ -41,6 +41,7 @@ function reviewClient({ event, eventName, repo, token }, { fetcher = fetch } = {
   const current = async () => {
     const live = await api(`/pulls/${pr.number}`);
     if (live.head?.sha !== pr.head.sha || live.state !== 'open') throw new Error('PR changed or closed; refusing to publish stale findings');
+    return live;
   };
   const pages = async path => {
     const all = [];
@@ -58,8 +59,10 @@ function reviewClient({ event, eventName, repo, token }, { fetcher = fetch } = {
 export async function reviewDiff(options, deps) {
   const client = reviewClient(options, deps);
   if (!client) return new Map();
-  await client.current();
+  const live = await client.current();
+  if (live.changed_files > 3000) throw new Error('PR diff exceeds the GitHub 3000-file limit; cannot review complete additions');
   const files = await client.pages(`/pulls/${client.pr.number}/files`);
+  if (Number.isInteger(live.changed_files) && files.length !== live.changed_files) throw new Error('Incomplete PR diff: changed-file count does not match returned files');
   return new Map(files.map(file => [file.filename, typeof file.patch === 'string' || file.changes === 0 ? rightLines(file.patch) : null]));
 }
 

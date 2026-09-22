@@ -46,7 +46,7 @@ test('template additions absent from compiled text are judged as explicit source
   } });
   assert.equal(report.passed, true);
   assert.equal(report.incomplete, false);
-  assert.equal(report.locations.unmappedAdditions.length, 0);
+  assert.deepEqual(report.locations.assessments.map(a => [a.path, a.line, a.rule]), [['moment.md', 2, 'scope']]);
 });
 test('deletions or unchanged sources create no model calls or findings', async t => {
   const { root, options } = await setup(t);
@@ -70,4 +70,20 @@ test('request-budget exhaustion leaves a visibly incomplete review', async t => 
   assert.equal(report.incomplete,true);
   assert.equal(report.passed,false);
   assert.equal(report.locations.omittedCandidates,4);
+});
+
+test('isolated whitespace additions remain visible incomplete coverage', async t => {
+  const { root, options } = await setup(t);
+  await writeFile(join(root, 'moment.md'), `${old}\n   \n${added}`);
+  const report = await reviewChanges(config, root, options, {fetcher:async () => assert.fail('Whitespace needs structural review')});
+  assert.equal(report.incomplete,true);
+  assert.equal(report.passed,false);
+  assert.deepEqual(report.locations.unreviewedWhitespace,[{path:'moment.md',line:2,endLine:2}]);
+});
+test('blank lines within a textual addition stay in the reviewed target', () => {
+  const units = addedPassages([{path:'a.md',content:'First\n\nSecond'}],new Map([['a.md',new Set([1,2,3])]]));
+  assert.deepEqual(units,[{path:'a.md',line:1,endLine:3,text:'First\n\nSecond'}]);
+});
+test('oversized added lines fail explicitly before review', () => {
+  assert.throws(()=>addedPassages([{path:'a.md',content:'x'.repeat(1801)}],new Map([['a.md',new Set([1])]])),/1800-character/);
 });

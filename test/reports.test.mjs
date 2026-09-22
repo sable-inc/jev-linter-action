@@ -24,3 +24,10 @@ test('publication rejects malformed or low-confidence saved anchors', () => {
     assert.throws(() => mergeReports([file({ ...report, locations: { findings: [{ ...finding, ...invalid }] } })], source), /Invalid saved source finding/);
   }
 });
+
+test('publishing rejects per-file and changed-line lint inputs before collecting artifacts', async () => {
+  const { publishReports } = await import('../src/reports.mjs');
+  for (const env of [{'INPUT_PER-FILE':'true'},{'INPUT_PER-FILE':'typo'},{'INPUT_CHANGED-LINES-ONLY':'true'}]) {
+    await assert.rejects(publishReports('/absent',env,{},['missing.json']),/cannot be combined/);
+  }
+});

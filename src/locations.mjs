@@ -50,9 +50,9 @@ export function addedPassages(files, diff) {
     const added = diff.get(file.path) ?? new Set();
     let start = 0;
     while (start < lines.length) {
-      if (!added.has(start + 1) || !lines[start].trim()) { start++; continue; }
+      if (!added.has(start + 1)) { start++; continue; }
       let end = start, length = 0;
-      while (end < lines.length && added.has(end + 1) && lines[end].trim() && length + lines[end].length <= 1800) length += lines[end++].length + 1;
+      while (end < lines.length && added.has(end + 1) && length + lines[end].length <= 1800) length += lines[end++].length + 1;
       if (end === start) throw new Error(`Added line exceeds the 1800-character source passage limit: ${file.path}:${start + 1}`);
       units.push({ path: file.path, line: start + 1, endLine: end, text: lines.slice(start, end).join('\n').trim() });
       start = end;
@@ -152,11 +152,13 @@ export function focusedBatchRequest(context, units, failures, model, explicitTar
 
 export async function locate(report, root, { sourcePatterns, model, apiKey, maxRequests = 32, priority = new Map(), changedOnly = false }, deps = {}) {
   if (!Number.isInteger(maxRequests) || maxRequests < 1 || maxRequests > 512) throw new Error('locate-max-requests must be 1–512');
-  const output = { findings: [], assessments: [], requests: 0, candidatePassages: 0, unlocatedGroups: 0, omittedCandidates: 0 };
+  const output = { findings: [], assessments: [], requests: 0, candidatePassages: 0, unlocatedGroups: 0, omittedCandidates: 0, unreviewedWhitespace: [] };
   const failed = report.results.filter(result => !result.passed);
   if (!failed.length) return output;
   const sources = await collectSources(root, sourcePatterns);
-  const added = changedOnly ? addedPassages(sources, priority) : [];
+  const additions = changedOnly ? addedPassages(sources, priority) : [];
+  output.unreviewedWhitespace = additions.filter(unit => !unit.text).map(({path, line, endLine}) => ({path, line, endLine}));
+  const added = additions.filter(unit => unit.text);
   if (added.some(unit => unit.text.includes('JEV_TARGET_'))) throw new Error('Authored text collides with review markers');
   const groups = new Map();
   for (const failure of failed) {
@@ -209,7 +211,6 @@ export async function locate(report, root, { sourcePatterns, model, apiKey, maxR
     if (!added) break;
   }
   output.omittedCandidates = output.candidatePassages - jobs.reduce((count, job) => count + job.units.length, 0);
-  if (changedOnly) output.unmappedAdditions = [];
   const seen = new Set();
   for (const job of jobs) {
     const answers = await evaluate(job.suite, job.files, model, apiKey, deps);

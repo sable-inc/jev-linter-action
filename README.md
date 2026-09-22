@@ -109,7 +109,8 @@ both Jev budgets; this is recorded on the finding.
 
 This is conservative text matching, not a compiler source map. Duplicate/ambiguous matches,
 transformed text, paragraphs shorter than 32 characters, and individual lines longer than
-1,800 characters may remain unlocalized. The failed check remains visible. Localization is
+1,800 characters may remain unlocalized in whole-input localization mode. In
+`changed-lines-only` mode, oversized added lines instead fail with exit 2 before review. The failed check remains visible. Localization is
 bounded to 32 additional requests by default (configurable 1–512), batching up to four
 passages against the failed rules per request and rotating across failed contexts; omitted candidates are reported. A contradiction requires supporting instructions
 in that bounded context. These are probabilistic findings, not ground truth or generated fixes.
@@ -212,9 +213,14 @@ to whole-input mode and fixtures. Absence of a finding is not proof of correctne
 
 Only additions can receive inline comments in either mode; diff context and deleted lines
 are never anchors. A changed-line review returns exit 1 for findings, exit 2 for provider
-errors, unavailable PR patches or exhausted request limits, and exit 0 otherwise. Source coordinates come directly from the added lines, including template directives,
+errors, unavailable or truncated PR diffs, added source lines over 1,800 characters,
+whitespace-only added passages, or exhausted request limits, and exit 0 otherwise. Source coordinates come directly from the added lines, including template directives,
 and are verified again before publishing. Built excerpts supply context. Reports disclose
 omitted targets and cropped context. Deletion-only regressions are not covered, and a
 finding does not prove that the edit introduced a new behavior relative to the base commit.
+
+Blank lines within a contiguous addition containing text are preserved in its target. An
+isolated whitespace-only addition can change Markdown/template structure; it is reported as
+unreviewed coverage and makes the review incomplete (exit 2), rather than silently passing.
 
 Manual full audits and synthetic calibration fixtures should leave this option disabled.

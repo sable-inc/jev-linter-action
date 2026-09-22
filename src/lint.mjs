@@ -42,6 +42,7 @@ export async function inside(root, file) {
 }
 
 export async function collect(root, patterns, perFile = false, { allowUnmatched = false, maxFileBytes = limit, maxTotalBytes = 16 * 1024 * 1024 } = {}) {
+  if (![maxFileBytes, maxTotalBytes].every(value => Number.isSafeInteger(value) && value > 0)) throw new Error('File byte limits must be positive safe integers');
   const files = new Map();
   let bytes = 0;
   for (const pattern of patterns) {

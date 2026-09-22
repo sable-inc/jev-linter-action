@@ -133,3 +133,13 @@ test('unchanged context beside an addition never receives a comment', async () =
   assert.equal(result.outsideDiff, 1);
   assert.equal(mock.writes.length, 0);
 });
+
+test('diff review rejects truncated lists and the GitHub file cap', async () => {
+  const { reviewDiff } = await import('../src/github.mjs');
+  for (const count of [2, 3001]) {
+    const mock = server();
+    const fetcher = async (url, request) => new URL(url).pathname.endsWith('/pulls/4')
+      ? Response.json({head:{sha},state:'open',changed_files:count}) : mock.fetcher(url,request);
+    await assert.rejects(reviewDiff(options,{fetcher}),/Incomplete PR diff|3000-file/);
+  }
+});

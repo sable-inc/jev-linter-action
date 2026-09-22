@@ -22,7 +22,7 @@ inputs:
     description: Ask Jev to identify authored passages contributing to failed rules. Leaves the original verdict unchanged.
     default: 'false'
   changed-lines-only:
-    description: Review only PR additions against every rule, using target files as context. Requires locate and github-token. Findings require 0.8 violation probability; unavailable patches or exhausted budgets fail as incomplete. Deletion-only regressions are not covered.
+    description: Review only PR additions against every rule, using target files as context. Requires locate, github-token and a same-repository pull_request event. Findings require 0.8 violation probability; unavailable patches, added lines over 1800 characters, whitespace-only added passages or exhausted budgets fail as incomplete. Deletion-only regressions are not covered.
     default: 'false'
   source-glob:
     description: Newline-separated globs of authored source files for line mapping. Optional patterns may match no files; the total set must not be empty.
@@ -33,7 +33,7 @@ inputs:
     description: Post inline findings in one review. For a matrix, keep this false and use one downstream publish-reports step. Never posts conversation summaries.
     default: 'false'
   github-token:
-    description: GitHub token for optional PR comments and prioritizing diff passages during localization; never sent to TypeSafe.
+    description: GitHub token required for publish-reports, post-comments and changed-lines-only; optional for diff prioritization during whole-input localization. Never sent to TypeSafe.
   review-id:
     description: Stable identifier for the combined PR review, used to deduplicate inline findings across runs and commits.
   max-comments:

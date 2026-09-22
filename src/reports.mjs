@@ -27,7 +27,7 @@ export function mergeReports(files, source) {
 }
 
 export async function publishReports(root, env, event, patterns) {
-  if (['INPUT_CONFIG', 'INPUT_MODEL', 'INPUT_GLOB', 'INPUT_QUESTIONS'].some(key => env[key]?.trim()) || env.INPUT_LOCATE === 'true' || env['INPUT_POST-COMMENTS'] === 'true') throw new Error('publish-reports cannot be combined with lint or localization inputs');
+  if (['INPUT_CONFIG', 'INPUT_MODEL', 'INPUT_GLOB', 'INPUT_QUESTIONS'].some(key => env[key]?.trim()) || (env['INPUT_PER-FILE'] && env['INPUT_PER-FILE'] !== 'false') || env['INPUT_CHANGED-LINES-ONLY'] === 'true' || env.INPUT_LOCATE === 'true' || env['INPUT_POST-COMMENTS'] === 'true') throw new Error('publish-reports cannot be combined with lint or localization inputs');
   if (env.GITHUB_EVENT_NAME !== 'pull_request') throw new Error('publish-reports requires a pull_request event');
   for (const pattern of patterns) {
     if (pattern.startsWith('/') || pattern.split(/[\\/]/).includes('..')) throw new Error('publish-reports must be repository-relative');
