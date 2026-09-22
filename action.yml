@@ -10,7 +10,7 @@ inputs:
   model:
     description: Jev model ID, for example jev-1.13.0. Required with inline inputs.
   glob:
-    description: Repository-relative file glob; multiple patterns may be separated by newlines.
+    description: Repository-relative target file glob (for example a complete built agent bundle); multiple patterns may be separated by newlines. Oversized inputs are reviewed in overlapping batches.
   questions:
     description: YAML list of yes/no questions. Strings expect yes with probability at least 0.8; objects can override expect and minProbability.
   per-file:
