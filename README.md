@@ -1,6 +1,6 @@
 # Jev Linter Action
 
-Review repository files using your own yes/no questions. [TypeSafe Jev](https://docs.typesafe.ai/api) returns probabilities; the action passes only when every expected answer meets its configured threshold. Runs on Node 24 with a checked-in bundle; consumers need no installation step.
+Review repository files using your own yes/no questions. [TypeSafe Jev](https://docs.typesafe.ai/api) returns probabilities; the action passes only when every blocking expected answer meets its configured threshold. Runs on Node 24 with a checked-in bundle; consumers need no installation step.
 
 ```yaml
 permissions:
@@ -17,6 +17,16 @@ steps:
         - Are navigation paths grounded in supplied evidence rather than guessed?
       api-key: ${{ secrets.TYPESAFE_API_KEY }}
 ```
+
+Set `advisory: true` on an object question to retain its scores, source findings, and
+warning annotations without failing CI. The result's `passed` remains the model
+judgment; the report/output `passed` reflects blocking questions only. Configuration,
+provider, and localization errors still fail. Questions are blocking by default.
+
+Whole-bundle contradiction and semantic-duplication questions should be advisory:
+chunks are not compared with each other. A highlighted passage does not establish a
+contradiction pair. Validate focused comparisons against real labeled cases before
+using them as gates.
 
 No configuration file is needed. `questions` is a YAML list inside a workflow
 block scalar (`|`). A plain question expects **yes**, with probability at least
@@ -155,7 +165,7 @@ with inline inputs. Its JSON schema is:
 {"model":"jev-1.13.0","suites":[{"name":"Prompts","files":["prompts/*.md"],"questions":[{"id":"consistent","question":"Are these instructions consistent?","expect":true,"minProbability":0.8}]}]}
 ```
 
-Each suite sends all matching files together, preserving filenames, so it can find conflicts across files. Set `"perFile": true` to evaluate each matched file independently, useful when each file contains an assembled agent configuration. Suites and question IDs must be unique. All patterns must match a file. Paths are relative to the repository root; imports outside the root, including symlinks, are refused.
+Each suite sends all matching files together, preserving filenames. Only passages present together in a request can be compared. Set `"perFile": true` to evaluate each matched file independently, useful when each file contains an assembled agent configuration. Suites and question IDs must be unique. All patterns must match a file. Paths are relative to the repository root; imports outside the root, including symlinks, are refused.
 
 For an expected `false`, the passing probability is `1 - P(yes)`. A probability of 0.5 fails; uncertainty needs review. Thresholds default to 0.8 for inline questions and must exceed 0.5. Calibrate questions and thresholds using labeled acceptable and violating examples. Pin a model version for repeatability; `jev-latest` is also accepted. The model can be wrong, and static lint does not measure how an agent behaves in a call.
 
@@ -193,4 +203,4 @@ Install the exact Bun version in [`.bun-version`](.bun-version) before rebuildin
 Local builds enforce this pin and CI reads the same file. Commit the rebuilt
 `dist/` files with source changes; CI prints any bundle drift and fails with rebuild instructions.
 
-Exit codes: 0 passed, 1 review check failed, 2 configuration/provider failure. Tests use mocked HTTP responses and need no key. MIT licensed.
+Exit codes: 0 all blocking checks passed (advisories may remain), 1 blocking review check failed, 2 configuration/provider failure. Tests use mocked HTTP responses and need no key. MIT licensed.

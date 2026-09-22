@@ -12,7 +12,7 @@ inputs:
   glob:
     description: Repository-relative target file glob (for example a complete built agent bundle); multiple patterns may be separated by newlines. Oversized inputs are reviewed in overlapping batches.
   questions:
-    description: YAML list of yes/no questions. Strings expect yes with probability at least 0.8; objects can override expect and minProbability.
+    description: YAML list of yes/no questions. Strings expect yes with probability at least 0.8; objects can override expect and minProbability or enable advisory mode for nonblocking findings.
   per-file:
     description: Review each file separately instead of reviewing all matched files together.
     default: 'false'
@@ -42,7 +42,7 @@ outputs:
   report:
     description: JSON report path. Localization additionally records verified source passages and line ranges.
   passed:
-    description: Whether all questions passed.
+    description: Whether all blocking questions passed. Advisory judgments remain in the report.
 runs:
   using: node24
   main: dist/main.mjs

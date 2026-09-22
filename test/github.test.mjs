@@ -125,3 +125,11 @@ test('the same finding is not reposted after an unrelated commit or a shifted li
   assert.equal(result.duplicates, 1);
   assert.equal(next.writes.length, 0);
 });
+
+test('advisory findings publish as nonblocking suggestions even when the gate passes', async () => {
+  const mock = server();
+  await publishLocations({passed:true, locations:{findings:[{...finding, advisory:true}]}}, options, mock);
+  assert.equal(mock.comments.length, 1);
+  assert.match(mock.comments[0].body, /advisory suggestion \(does not block CI\)/);
+  assert.doesNotMatch(mock.comments[0].body, /failed check/);
+});

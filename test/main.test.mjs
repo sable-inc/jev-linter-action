@@ -65,3 +65,27 @@ test('saved matrix reports publish one inline review without a TypeSafe key or s
   assert.equal(posted[0].comments.length, 1);
   assert.equal(posted[0].comments[0].line, 1);
 });
+
+test('advisory CLI findings warn, keep their failed judgment, and exit successfully', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'jev-advisory-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(join(root, 'target.md'), 'An instruction to review.');
+  await writeFile(join(root, 'mock.mjs'), `globalThis.fetch = async () => Response.json({answers:{rule:{type:'noul',noul:0.99}}});`);
+  const output = join(root, 'outputs');
+  const result = spawnSync(process.execPath, ['--import', join(root, 'mock.mjs'), fileURLToPath(new URL('../src/main.mjs', import.meta.url))], {
+    cwd: root, encoding: 'utf8', env: {
+      PATH: process.env.PATH, RUNNER_TEMP: root, GITHUB_OUTPUT: output, GITHUB_ACTIONS: 'true',
+      INPUT_MODEL: 'jev-1.13.0', INPUT_GLOB: 'target.md',
+      INPUT_QUESTIONS: JSON.stringify([{ id:'rule', question:'Are there conflicting requirements?', expect:false, advisory:true }]),
+      'INPUT_API-KEY': 'mock-key',
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /::warning::/);
+  assert.doesNotMatch(result.stdout, /::error::/);
+  const outputs = await readFile(output, 'utf8');
+  assert.match(outputs, /passed=true/);
+  const report = JSON.parse(await readFile(outputs.match(/^report=(.+)$/m)[1], 'utf8'));
+  assert.equal(report.results[0].passed, false);
+  assert.equal(report.results[0].advisory, true);
+});

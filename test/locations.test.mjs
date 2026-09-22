@@ -143,3 +143,15 @@ test('batches candidate passages and prioritizes diff lines within a bounded req
   assert.equal(result.assessments.length, 4);
   assert.deepEqual(result.findings.map(f => f.line), [11]);
 });
+
+test('advisory source findings retain their classification even when the gate passes', async t => {
+  const { root, report } = await fixture(t);
+  report.passed = true;
+  report.results[0].advisory = true;
+  const result = await locate(report, root, { sourcePatterns:['moment.md'], model:'jev-1.13.0', apiKey:'key' }, {
+    fetcher: async () => Response.json({answers:{location_0:{type:'noul',noul:0.95}}}),
+  });
+  assert.equal(result.findings.length, 1);
+  assert.equal(result.findings[0].advisory, true);
+  assert.equal(report.passed, true);
+});
