@@ -7583,6 +7583,8 @@ async function loadConfig(root, env = process.env, argument) {
 }
 
 // src/github.mjs
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 var encodePath = (path) => path.split("/").map(encodeURIComponent).join("/");
 var plain = (value) => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("@", "&#64;");
 var quoted = (value) => value.split(`
@@ -7667,6 +7669,55 @@ function reviewClient({ event, eventName, repo, token }, { fetcher = fetch } = {
   };
   return { pr, api, current, pages };
 }
+var exec = promisify(execFile);
+async function fileDiffs(files, options, pr, live) {
+  const diffs = new Map;
+  let mergeBase;
+  const git = async (args) => (await exec("git", args, {
+    cwd: options.root,
+    encoding: "utf8",
+    timeout: 30000,
+    maxBuffer: 32 * 1024 * 1024,
+    env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" }
+  })).stdout;
+  for (const file of files) {
+    if (typeof file.patch === "string" || file.changes === 0 || file.status === "removed") {
+      diffs.set(file.filename, rightLines(file.patch));
+      continue;
+    }
+    if (!options.root) {
+      diffs.set(file.filename, null);
+      continue;
+    }
+    try {
+      if (!mergeBase) {
+        const base = live.base?.sha ?? pr.base.sha;
+        if (!/^[a-f0-9]{40}$/.test(base ?? ""))
+          throw new Error("Missing PR base SHA");
+        if ((await git(["rev-parse", "HEAD"])).trim() !== pr.head.sha)
+          throw new Error("Checkout is not PR HEAD");
+        mergeBase = (await git(["merge-base", base, pr.head.sha])).trim();
+        if (!/^[a-f0-9]{40}$/.test(mergeBase))
+          throw new Error("Invalid merge base");
+      }
+      const after = `${pr.head.sha}:${file.filename}`;
+      if (file.status === "added") {
+        const content = await git(["show", after]);
+        const count = content === "" ? 0 : content.split(`
+`).length - Number(content.endsWith(`
+`));
+        diffs.set(file.filename, new Set(Array.from({ length: count }, (_, i) => i + 1)));
+      } else {
+        const before = `${mergeBase}:${file.previous_filename ?? file.filename}`;
+        const patch = await git(["diff", "--no-ext-diff", "--no-textconv", "--text", "--unified=0", before, after, "--"]);
+        diffs.set(file.filename, rightLines(patch));
+      }
+    } catch {
+      throw new Error(`PR patch unavailable for ${file.filename}; local Git fallback failed. Check out the exact PR HEAD with fetch-depth: 0 (including the PR base).`);
+    }
+  }
+  return diffs;
+}
 async function reviewDiff(options, deps) {
   const client = reviewClient(options, deps);
   if (!client)
@@ -7677,7 +7728,7 @@ async function reviewDiff(options, deps) {
   const files = await client.pages(`/pulls/${client.pr.number}/files`);
   if (Number.isInteger(live.changed_files) && files.length !== live.changed_files)
     throw new Error("Incomplete PR diff: changed-file count does not match returned files");
-  return new Map(files.map((file) => [file.filename, typeof file.patch === "string" || file.changes === 0 ? rightLines(file.patch) : null]));
+  return fileDiffs(files, options, client.pr, live);
 }
 async function publishLocations(report, options, deps) {
   const client = reviewClient(options, deps);
@@ -7691,9 +7742,10 @@ async function publishLocations(report, options, deps) {
   if (!report.locations.findings.length)
     return { comments: 0, verified: 0, unmapped: 0, outsideDiff: 0, duplicates: 0 };
   const { pr, api, current, pages } = client;
-  await current();
+  const live = await current();
   const files = await pages(`/pulls/${pr.number}/files`);
-  const diffs = new Map(files.map((file) => [file.filename, rightLines(file.patch)]));
+  const paths = new Set(report.locations.findings.map((finding) => finding.path));
+  const diffs = await fileDiffs(files.filter((file) => paths.has(file.filename)), options, pr, live);
   const existing = await pages(`/pulls/${pr.number}/comments`);
   const prefix = `jev-location:${digest(reviewId).slice(0, 16)}`;
   const headMarker = `<!-- ${prefix}:head:${pr.head.sha} -->`;
@@ -7787,6 +7839,7 @@ async function publishReports(root, env, event, patterns) {
   const files = await collect(root, patterns, false, { maxFileBytes: 16 * 1024 * 1024, maxTotalBytes: 128 * 1024 * 1024 });
   const report = mergeReports(files, { repository: env.GITHUB_REPOSITORY, commit: event?.pull_request?.head?.sha, runId: env.GITHUB_RUN_ID });
   const publication = await publishLocations(report, {
+    root,
     event,
     eventName: env.GITHUB_EVENT_NAME,
     repo: env.GITHUB_REPOSITORY,
@@ -7822,7 +7875,7 @@ async function main() {
   const apiKey = process.env["INPUT_API-KEY"] || process.env.TYPESAFE_API_KEY;
   if (options.changedOnly && (process.env.GITHUB_EVENT_NAME !== "pull_request" || !event?.pull_request || !process.env["INPUT_GITHUB-TOKEN"]))
     throw new Error("changed-lines-only requires a PR event and github-token");
-  const priority = options.changedOnly ? await reviewDiff({ event, eventName: process.env.GITHUB_EVENT_NAME, repo: process.env.GITHUB_REPOSITORY, token: process.env["INPUT_GITHUB-TOKEN"] }) : new Map;
+  const priority = options.changedOnly ? await reviewDiff({ root, event, eventName: process.env.GITHUB_EVENT_NAME, repo: process.env.GITHUB_REPOSITORY, token: process.env["INPUT_GITHUB-TOKEN"] }) : new Map;
   const report = options.changedOnly ? await reviewChanges(config, root, { ...options, apiKey, priority }) : await lint(config, root, apiKey);
   report.source = { repository: process.env.GITHUB_REPOSITORY, commit: event?.pull_request?.head?.sha || process.env.GITHUB_SHA, runId: process.env.GITHUB_RUN_ID };
   let extensionFailed = report.incomplete === true;
@@ -7830,7 +7883,7 @@ async function main() {
     console.error("::error::Added-line review is incomplete: request budget exhausted or whitespace-only additions need structural review. See the saved coverage report.");
   if (options.enabled) {
     try {
-      const priority2 = !options.changedOnly && event?.pull_request?.head?.repo?.full_name === process.env.GITHUB_REPOSITORY && process.env["INPUT_GITHUB-TOKEN"] && !report.passed ? await reviewDiff({ event, eventName: process.env.GITHUB_EVENT_NAME, repo: process.env.GITHUB_REPOSITORY, token: process.env["INPUT_GITHUB-TOKEN"] }) : new Map;
+      const priority2 = !options.changedOnly && event?.pull_request?.head?.repo?.full_name === process.env.GITHUB_REPOSITORY && process.env["INPUT_GITHUB-TOKEN"] && !report.passed ? await reviewDiff({ root, event, eventName: process.env.GITHUB_EVENT_NAME, repo: process.env.GITHUB_REPOSITORY, token: process.env["INPUT_GITHUB-TOKEN"] }) : new Map;
       if (!options.changedOnly)
         report.locations = await locate(report, root, { ...options, model: config.model, apiKey, priority: priority2 });
       for (const finding of report.locations.findings) {
@@ -7842,6 +7895,7 @@ async function main() {
       }
       if (options.post && !report.passed) {
         report.locations.publication = await publishLocations(report, {
+          root,
           event,
           eventName: process.env.GITHUB_EVENT_NAME,
           repo: process.env.GITHUB_REPOSITORY,
