@@ -152,7 +152,7 @@ export async function publishLocations(report, options, deps) {
     }
     if (!contents.get(finding.path) || contents.get(finding.path).slice(finding.line - 1, finding.endLine).join('\n').trim() !== finding.text) { unmapped++; continue; }
     verified.push(finding);
-    const anchor = [...(diffs.get(finding.path) ?? [])].find(line => line >= finding.line && line <= finding.endLine);
+    const anchor = [...(diffs.get(finding.path) ?? [])].find(line => line >= finding.line && line <= finding.endLine && contents.get(finding.path)[line - 1]?.trim());
     if (!anchor) { outsideDiff++; continue; }
     if (alreadyPosted + pending.length >= maxComments) continue;
     pending.push({ path: finding.path, line: anchor, side: 'RIGHT', body: `${marker}\n${headMarker}\n${findingBody(finding, repo, pr.head.sha)}` });

@@ -143,3 +143,12 @@ test('diff review rejects truncated lists and the GitHub file cap', async () => 
     await assert.rejects(reviewDiff(options,{fetcher}),/Incomplete PR diff|3000-file/);
   }
 });
+
+
+test('inline findings anchor to added text instead of its leading blank separator', async () => {
+  const mock = server({ patch: '@@ -2,0 +3,2 @@\n+\n+' + text, content: '# Demo\nContext.\n\n' + text });
+  const ranged = { ...report, locations: { ...report.locations, findings: [{ ...finding, line: 3, endLine: 4 }] } };
+  const result = await publishLocations(ranged, options, mock);
+  assert.equal(result.comments, 1);
+  assert.equal(mock.comments[0].line, 4);
+});

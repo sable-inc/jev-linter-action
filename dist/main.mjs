@@ -7783,7 +7783,7 @@ async function publishLocations(report, options, deps) {
       continue;
     }
     verified.push(finding);
-    const anchor = [...diffs.get(finding.path) ?? []].find((line) => line >= finding.line && line <= finding.endLine);
+    const anchor = [...diffs.get(finding.path) ?? []].find((line) => line >= finding.line && line <= finding.endLine && contents.get(finding.path)[line - 1]?.trim());
     if (!anchor) {
       outsideDiff++;
       continue;
