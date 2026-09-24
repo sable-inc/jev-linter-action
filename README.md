@@ -76,6 +76,7 @@ steps:
   - uses: actions/checkout@v4
     with:
       ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      fetch-depth: 0 # Missing API patches are recovered from committed Git history.
       persist-credentials: false
   - run: sable build --bundle -f acme/demo
   - uses: sable-inc/jev-linter-action@<reviewed-commit>
@@ -123,9 +124,17 @@ unmapped passages, and coverage statistics stay in check summaries and report ar
 Identical findings are deduplicated across retries and commits, even if line numbers shift.
 
 For a matrix, leave `post-comments: false` in every worker. Upload each worker's `report` output,
-then download those artifacts in **one downstream job** and invoke the action once:
+then check out the PR head and download those artifacts in **one downstream job** before invoking the action once:
 
 ```yaml
+- uses: actions/checkout@v4
+  with:
+    ref: ${{ github.event.pull_request.head.sha }}
+    fetch-depth: 0
+    persist-credentials: false
+- uses: actions/download-artifact@v4
+  with:
+    path: jev-reports
 - uses: sable-inc/jev-linter-action@<reviewed-commit>
   with:
     publish-reports: jev-reports/**/jev-lint-*.json
@@ -143,7 +152,13 @@ exit means publishing succeeded, not that the original lint checks passed. Use a
 and workflow concurrency per PR to serialize publication.
 
 Build and localize the PR head as in the checkout example, so coordinates refer to the same
-revision used for publication. Stale PR heads and forks cannot receive writes. A merge checkout
+revision used for publication. Use `fetch-depth: 0` for both review and publication checkouts.
+When GitHub omits a file patch, the action compares its committed blobs at the PR merge base
+and HEAD to recover added lines (including renames). If the base has advanced beyond the local
+checkout, GitHub compare metadata supplies the current merge-base SHA; its blobs remain in full
+PR HEAD history. This does not fetch history or run external diff/textconv commands. Shallow
+history or the wrong checkout produces an explicit execution error instead of silently skipping
+additions. Stale PR heads and forks cannot receive writes. A merge checkout
 may contain base-only changes that make coordinates unverified; GitHub may also omit inline
 content for large files. Those findings remain in checks and artifacts. Source patterns may
 individually match no files; the total source set must not be empty.

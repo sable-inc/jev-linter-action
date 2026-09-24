@@ -35,7 +35,7 @@ export async function publishReports(root, env, event, patterns) {
   // Saved assessments can exceed source size; this mode never sends report contents to Jev.
   const files = await collect(root, patterns, false, { maxFileBytes: 16 * 1024 * 1024, maxTotalBytes: 128 * 1024 * 1024 });
   const report = mergeReports(files, { repository: env.GITHUB_REPOSITORY, commit: event?.pull_request?.head?.sha, runId: env.GITHUB_RUN_ID });
-  const publication = await publishLocations(report, { event, eventName: env.GITHUB_EVENT_NAME, repo: env.GITHUB_REPOSITORY,
+  const publication = await publishLocations(report, { root, event, eventName: env.GITHUB_EVENT_NAME, repo: env.GITHUB_REPOSITORY,
     token: env['INPUT_GITHUB-TOKEN'], reviewId: env['INPUT_REVIEW-ID'] || 'jev', maxComments: Number(env['INPUT_MAX-COMMENTS'] || 5) });
   console.log(`Reviewed ${files.length} saved reports; posted ${publication.comments} inline findings in at most one PR review.`);
   if (env.GITHUB_STEP_SUMMARY) await appendFile(env.GITHUB_STEP_SUMMARY, `## Jev inline publication\n\nReports: ${files.length}. Unique localized findings: ${report.locations.findings.length}. Inline comments: ${publication.comments}. Outside the diff: ${publication.outsideDiff}. Unverified: ${publication.unmapped}. Already reported: ${publication.duplicates}.\n\nOriginal lint verdicts and full source findings remain in the agent checks and artifacts. No conversation summaries are posted.\n`);

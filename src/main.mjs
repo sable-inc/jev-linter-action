@@ -20,7 +20,7 @@ async function main() {
   const options = locationOptions(process.env);
   const apiKey = process.env['INPUT_API-KEY'] || process.env.TYPESAFE_API_KEY;
   if (options.changedOnly && (process.env.GITHUB_EVENT_NAME !== 'pull_request' || !event?.pull_request || !process.env['INPUT_GITHUB-TOKEN'])) throw new Error('changed-lines-only requires a PR event and github-token');
-  const priority = options.changedOnly ? await reviewDiff({ event, eventName: process.env.GITHUB_EVENT_NAME, repo: process.env.GITHUB_REPOSITORY, token: process.env['INPUT_GITHUB-TOKEN'] }) : new Map();
+  const priority = options.changedOnly ? await reviewDiff({ root, event, eventName: process.env.GITHUB_EVENT_NAME, repo: process.env.GITHUB_REPOSITORY, token: process.env['INPUT_GITHUB-TOKEN'] }) : new Map();
   const report = options.changedOnly
     ? await reviewChanges(config, root, { ...options, apiKey, priority })
     : await lint(config, root, apiKey);
@@ -29,7 +29,7 @@ async function main() {
   if (report.incomplete) console.error('::error::Added-line review is incomplete: request budget exhausted or whitespace-only additions need structural review. See the saved coverage report.');
   if (options.enabled) {
     try {
-      const priority = !options.changedOnly && event?.pull_request?.head?.repo?.full_name === process.env.GITHUB_REPOSITORY && process.env['INPUT_GITHUB-TOKEN'] && !report.passed ? await reviewDiff({ event, eventName: process.env.GITHUB_EVENT_NAME, repo: process.env.GITHUB_REPOSITORY, token: process.env['INPUT_GITHUB-TOKEN'] }) : new Map();
+      const priority = !options.changedOnly && event?.pull_request?.head?.repo?.full_name === process.env.GITHUB_REPOSITORY && process.env['INPUT_GITHUB-TOKEN'] && !report.passed ? await reviewDiff({ root, event, eventName: process.env.GITHUB_EVENT_NAME, repo: process.env.GITHUB_REPOSITORY, token: process.env['INPUT_GITHUB-TOKEN'] }) : new Map();
       if (!options.changedOnly) report.locations = await locate(report, root, { ...options, model: config.model, apiKey, priority });
       for (const finding of report.locations.findings) {
         const message = `Possible ${finding.rule} violation: ${finding.question} Required answer: ${finding.expected ? 'yes' : 'no'}. Jev localized this passage with probability ${finding.probability.toFixed(2)}. Review it in context.`;
@@ -37,7 +37,7 @@ async function main() {
         else console.log(`${finding.path}:${finding.line}-${finding.endLine} ${escape(message)}`);
       }
       if (options.post && !report.passed) {
-        report.locations.publication = await publishLocations(report, { event, eventName: process.env.GITHUB_EVENT_NAME, repo: process.env.GITHUB_REPOSITORY,
+        report.locations.publication = await publishLocations(report, { root, event, eventName: process.env.GITHUB_EVENT_NAME, repo: process.env.GITHUB_REPOSITORY,
           token: process.env['INPUT_GITHUB-TOKEN'], reviewId: process.env['INPUT_REVIEW-ID'], maxComments: options.maxComments });
       }
     } catch (error) {

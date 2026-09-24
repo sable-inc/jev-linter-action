@@ -1,3 +1,5 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { digest } from './locations.mjs';
 
 const encodePath = path => path.split('/').map(encodeURIComponent).join('/');
@@ -56,6 +58,56 @@ function reviewClient({ event, eventName, repo, token }, { fetcher = fetch } = {
   return { pr, api, current, pages };
 }
 
+const exec = promisify(execFile);
+
+// Compare committed blobs so renames preserve their unchanged lines and Git
+// attributes cannot run external diff/textconv commands on the checked-out PR.
+async function fileDiffs(files, options, pr, live, api) {
+  const diffs = new Map();
+  let mergeBase;
+  const git = async args => (await exec('git', args, {
+    cwd: options.root, encoding: 'utf8', timeout: 30_000, maxBuffer: 32 * 1024 * 1024,
+    env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' },
+  })).stdout;
+  for (const file of files) {
+    if (typeof file.patch === 'string' || file.changes === 0 || file.status === 'removed' || file.status === 'deleted') {
+      diffs.set(file.filename, rightLines(file.patch));
+      continue;
+    }
+    if (!options.root) { diffs.set(file.filename, null); continue; }
+    try {
+      if (!mergeBase) {
+        const base = live.base?.sha ?? pr.base.sha;
+        if (!/^[a-f0-9]{40}$/.test(base ?? '')) throw new Error('Missing PR base SHA');
+        if ((await git(['rev-parse', 'HEAD'])).trim() !== pr.head.sha) throw new Error('Checkout is not PR HEAD');
+        if ((await git(['rev-parse', '--is-shallow-repository'])).trim() !== 'false') throw new Error('Full PR history is required');
+        try {
+          mergeBase = (await git(['merge-base', base, pr.head.sha])).trim();
+        } catch {
+          // The base can advance after checkout. Its merge base is still an
+          // ancestor of PR HEAD, so full HEAD history already contains the blob.
+          const comparison = await api(`/compare/${base}...${pr.head.sha}`);
+          mergeBase = comparison?.merge_base_commit?.sha;
+        }
+        if (!/^[a-f0-9]{40}$/.test(mergeBase)) throw new Error('Invalid merge base');
+      }
+      const after = `${pr.head.sha}:${file.filename}`;
+      if (file.status === 'added') {
+        const content = await git(['show', after]);
+        const count = content === '' ? 0 : content.split('\n').length - Number(content.endsWith('\n'));
+        diffs.set(file.filename, new Set(Array.from({ length: count }, (_, i) => i + 1)));
+      } else {
+        const before = `${mergeBase}:${file.previous_filename ?? file.filename}`;
+        const patch = await git(['diff', '--no-ext-diff', '--no-textconv', '--text', '--unified=0', before, after, '--']);
+        diffs.set(file.filename, rightLines(patch));
+      }
+    } catch {
+      throw new Error(`PR patch unavailable for ${file.filename}; local Git fallback failed. Check out the exact PR HEAD with fetch-depth: 0 (including the PR base).`);
+    }
+  }
+  return diffs;
+}
+
 export async function reviewDiff(options, deps) {
   const client = reviewClient(options, deps);
   if (!client) return new Map();
@@ -63,7 +115,7 @@ export async function reviewDiff(options, deps) {
   if (live.changed_files > 3000) throw new Error('PR diff exceeds the GitHub 3000-file limit; cannot review complete additions');
   const files = await client.pages(`/pulls/${client.pr.number}/files`);
   if (Number.isInteger(live.changed_files) && files.length !== live.changed_files) throw new Error('Incomplete PR diff: changed-file count does not match returned files');
-  return new Map(files.map(file => [file.filename, typeof file.patch === 'string' || file.changes === 0 ? rightLines(file.patch) : null]));
+  return fileDiffs(files, options, client.pr, live, client.api);
 }
 
 /** Only same-repository pull_request runs may write; all anchors are rechecked at PR HEAD. */
@@ -75,9 +127,10 @@ export async function publishLocations(report, options, deps) {
   if (!Number.isInteger(maxComments) || maxComments < 0 || maxComments > 20) throw new Error('max-comments must be 0–20');
   if (!report.locations.findings.length) return { comments: 0, verified: 0, unmapped: 0, outsideDiff: 0, duplicates: 0 };
   const { pr, api, current, pages } = client;
-  await current();
+  const live = await current();
   const files = await pages(`/pulls/${pr.number}/files`);
-  const diffs = new Map(files.map(file => [file.filename, rightLines(file.patch)]));
+  const paths = new Set(report.locations.findings.map(finding => finding.path));
+  const diffs = await fileDiffs(files.filter(file => paths.has(file.filename)), options, pr, live, api);
   const existing = await pages(`/pulls/${pr.number}/comments`);
   const prefix = `jev-location:${digest(reviewId).slice(0, 16)}`;
   const headMarker = `<!-- ${prefix}:head:${pr.head.sha} -->`;
@@ -100,7 +153,7 @@ export async function publishLocations(report, options, deps) {
     }
     if (!contents.get(finding.path) || contents.get(finding.path).slice(finding.line - 1, finding.endLine).join('\n').trim() !== finding.text) { unmapped++; continue; }
     verified.push(finding);
-    const anchor = [...(diffs.get(finding.path) ?? [])].find(line => line >= finding.line && line <= finding.endLine);
+    const anchor = [...(diffs.get(finding.path) ?? [])].find(line => line >= finding.line && line <= finding.endLine && contents.get(finding.path)[line - 1]?.trim());
     if (!anchor) { outsideDiff++; continue; }
     if (alreadyPosted + pending.length >= maxComments) continue;
     pending.push({ path: finding.path, line: anchor, side: 'RIGHT', body: `${marker}\n${headMarker}\n${findingBody(finding, repo, pr.head.sha)}` });
