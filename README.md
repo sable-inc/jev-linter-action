@@ -134,7 +134,6 @@ then check out the PR head and download those artifacts in **one downstream job*
     persist-credentials: false
 - uses: actions/download-artifact@v4
   with:
-    name: jev-reports
     path: jev-reports
 - uses: sable-inc/jev-linter-action@<reviewed-commit>
   with:
