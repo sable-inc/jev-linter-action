@@ -62,7 +62,7 @@ const exec = promisify(execFile);
 
 // Compare committed blobs so renames preserve their unchanged lines and Git
 // attributes cannot run external diff/textconv commands on the checked-out PR.
-async function fileDiffs(files, options, pr, live) {
+async function fileDiffs(files, options, pr, live, api) {
   const diffs = new Map();
   let mergeBase;
   const git = async args => (await exec('git', args, {
@@ -80,7 +80,14 @@ async function fileDiffs(files, options, pr, live) {
         const base = live.base?.sha ?? pr.base.sha;
         if (!/^[a-f0-9]{40}$/.test(base ?? '')) throw new Error('Missing PR base SHA');
         if ((await git(['rev-parse', 'HEAD'])).trim() !== pr.head.sha) throw new Error('Checkout is not PR HEAD');
-        mergeBase = (await git(['merge-base', base, pr.head.sha])).trim();
+        try {
+          mergeBase = (await git(['merge-base', base, pr.head.sha])).trim();
+        } catch {
+          // The base can advance after checkout. Its merge base is still an
+          // ancestor of PR HEAD, so full HEAD history already contains the blob.
+          const comparison = await api(`/compare/${base}...${pr.head.sha}`);
+          mergeBase = comparison?.merge_base_commit?.sha;
+        }
         if (!/^[a-f0-9]{40}$/.test(mergeBase)) throw new Error('Invalid merge base');
       }
       const after = `${pr.head.sha}:${file.filename}`;
@@ -107,7 +114,7 @@ export async function reviewDiff(options, deps) {
   if (live.changed_files > 3000) throw new Error('PR diff exceeds the GitHub 3000-file limit; cannot review complete additions');
   const files = await client.pages(`/pulls/${client.pr.number}/files`);
   if (Number.isInteger(live.changed_files) && files.length !== live.changed_files) throw new Error('Incomplete PR diff: changed-file count does not match returned files');
-  return fileDiffs(files, options, client.pr, live);
+  return fileDiffs(files, options, client.pr, live, client.api);
 }
 
 /** Only same-repository pull_request runs may write; all anchors are rechecked at PR HEAD. */
@@ -122,7 +129,7 @@ export async function publishLocations(report, options, deps) {
   const live = await current();
   const files = await pages(`/pulls/${pr.number}/files`);
   const paths = new Set(report.locations.findings.map(finding => finding.path));
-  const diffs = await fileDiffs(files.filter(file => paths.has(file.filename)), options, pr, live);
+  const diffs = await fileDiffs(files.filter(file => paths.has(file.filename)), options, pr, live, api);
   const existing = await pages(`/pulls/${pr.number}/comments`);
   const prefix = `jev-location:${digest(reviewId).slice(0, 16)}`;
   const headMarker = `<!-- ${prefix}:head:${pr.head.sha} -->`;

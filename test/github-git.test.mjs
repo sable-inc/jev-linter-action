@@ -111,3 +111,28 @@ test('deleted files without patches never require a HEAD blob or checkout', asyn
   assert.deepEqual([...diff.get('removed.md')], []);
   assert.deepEqual([...diff.get('deleted.md')], []);
 });
+
+
+test('base advancing after checkout uses the current merge base without fetching history', async t => {
+  const f = await fixture(t);
+  const mergedIntoBase = f.options.event.pull_request.head.sha;
+  await writeFile(join(f.root, f.path), '# Demo\nKeep this.\nNew instruction.\nAnother addition.\n');
+  f.git('commit', '-am', 'second PR change');
+  f.options.event.pull_request.head.sha = f.git('rev-parse', 'HEAD');
+  const liveBase = 'b'.repeat(40); // The runner has not fetched this new base commit.
+  let comparisons = 0;
+  const fetcher = async (url, request) => {
+    const path = new URL(url).pathname;
+    if (path.endsWith('/pulls/1')) return Response.json({ state: 'open', head: f.options.event.pull_request.head, base: { sha: liveBase }, changed_files: 1 });
+    if (path.includes('/compare/')) {
+      assert.ok(path.endsWith(`/compare/${liveBase}...${f.options.event.pull_request.head.sha}`));
+      comparisons++;
+      return Response.json({ merge_base_commit: { sha: mergedIntoBase } });
+    }
+    return f.fetcher(url, request);
+  };
+  const diff = await reviewDiff(f.options, { fetcher });
+  // The first PR addition now belongs to the base, so event-base fallback would be wrong.
+  assert.deepEqual([...diff.get(f.path)], [4]);
+  assert.equal(comparisons, 1);
+});
