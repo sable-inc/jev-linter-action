@@ -124,9 +124,18 @@ unmapped passages, and coverage statistics stay in check summaries and report ar
 Identical findings are deduplicated across retries and commits, even if line numbers shift.
 
 For a matrix, leave `post-comments: false` in every worker. Upload each worker's `report` output,
-then download those artifacts in **one downstream job** and invoke the action once:
+then check out the PR head and download those artifacts in **one downstream job** before invoking the action once:
 
 ```yaml
+- uses: actions/checkout@v4
+  with:
+    ref: ${{ github.event.pull_request.head.sha }}
+    fetch-depth: 0
+    persist-credentials: false
+- uses: actions/download-artifact@v4
+  with:
+    name: jev-reports
+    path: jev-reports
 - uses: sable-inc/jev-linter-action@<reviewed-commit>
   with:
     publish-reports: jev-reports/**/jev-lint-*.json

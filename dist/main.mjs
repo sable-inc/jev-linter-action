@@ -7681,7 +7681,7 @@ async function fileDiffs(files, options, pr, live) {
     env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" }
   })).stdout;
   for (const file of files) {
-    if (typeof file.patch === "string" || file.changes === 0 || file.status === "removed") {
+    if (typeof file.patch === "string" || file.changes === 0 || file.status === "removed" || file.status === "deleted") {
       diffs.set(file.filename, rightLines(file.patch));
       continue;
     }

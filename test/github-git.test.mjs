@@ -99,3 +99,15 @@ test('available API patches do not require a local checkout', async t => {
   const options = { ...f.options, root: '/does-not-exist' };
   assert.deepEqual([...(await reviewDiff(options, f)).get(f.path)], [3]);
 });
+
+
+test('deleted files without patches never require a HEAD blob or checkout', async t => {
+  const f = await fixture(t);
+  f.files.splice(0, f.files.length,
+    { filename: 'removed.md', status: 'removed', changes: 3, additions: 0 },
+    { filename: 'deleted.md', status: 'deleted', changes: 3, additions: 0 },
+  );
+  const diff = await reviewDiff({ ...f.options, root: '/does-not-exist' }, f);
+  assert.deepEqual([...diff.get('removed.md')], []);
+  assert.deepEqual([...diff.get('deleted.md')], []);
+});
