@@ -80,6 +80,7 @@ async function fileDiffs(files, options, pr, live, api) {
         const base = live.base?.sha ?? pr.base.sha;
         if (!/^[a-f0-9]{40}$/.test(base ?? '')) throw new Error('Missing PR base SHA');
         if ((await git(['rev-parse', 'HEAD'])).trim() !== pr.head.sha) throw new Error('Checkout is not PR HEAD');
+        if ((await git(['rev-parse', '--is-shallow-repository'])).trim() !== 'false') throw new Error('Full PR history is required');
         try {
           mergeBase = (await git(['merge-base', base, pr.head.sha])).trim();
         } catch {

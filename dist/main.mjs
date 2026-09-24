@@ -7696,6 +7696,8 @@ async function fileDiffs(files, options, pr, live, api) {
           throw new Error("Missing PR base SHA");
         if ((await git(["rev-parse", "HEAD"])).trim() !== pr.head.sha)
           throw new Error("Checkout is not PR HEAD");
+        if ((await git(["rev-parse", "--is-shallow-repository"])).trim() !== "false")
+          throw new Error("Full PR history is required");
         try {
           mergeBase = (await git(["merge-base", base, pr.head.sha])).trim();
         } catch {

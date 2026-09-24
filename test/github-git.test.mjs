@@ -136,3 +136,21 @@ test('base advancing after checkout uses the current merge base without fetching
   assert.deepEqual([...diff.get(f.path)], [4]);
   assert.equal(comparisons, 1);
 });
+
+
+test('shallow checkouts are rejected even when their merge-base blob is present', async t => {
+  const f = await fixture(t);
+  f.git('clone', '--no-local', '--depth=2', '--branch', 'feature', f.root, join(f.root, 'shallow'));
+  const ancestor = f.git('rev-parse', 'HEAD^');
+  let comparisons = 0;
+  for (const base of [ancestor, 'b'.repeat(40)]) {
+    const fetcher = async (url, request) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith('/pulls/1')) return Response.json({ state: 'open', head: f.options.event.pull_request.head, base: { sha: base }, changed_files: 1 });
+      if (path.includes('/compare/')) { comparisons++; return Response.json({ merge_base_commit: { sha: ancestor } }); }
+      return f.fetcher(url, request);
+    };
+    await assert.rejects(reviewDiff({ ...f.options, root: join(f.root, 'shallow') }, { fetcher }), /fetch-depth: 0/);
+  }
+  assert.equal(comparisons, 0);
+});

@@ -156,8 +156,9 @@ revision used for publication. Use `fetch-depth: 0` for both review and publicat
 When GitHub omits a file patch, the action compares its committed blobs at the PR merge base
 and HEAD to recover added lines (including renames). If the base has advanced beyond the local
 checkout, GitHub compare metadata supplies the current merge-base SHA; its blobs remain in full
-PR HEAD history. This does not fetch history or run external diff/textconv commands. Missing history or the wrong checkout produces an explicit execution
-error instead of silently skipping additions. Stale PR heads and forks cannot receive writes. A merge checkout
+PR HEAD history. This does not fetch history or run external diff/textconv commands. Shallow
+history or the wrong checkout produces an explicit execution error instead of silently skipping
+additions. Stale PR heads and forks cannot receive writes. A merge checkout
 may contain base-only changes that make coordinates unverified; GitHub may also omit inline
 content for large files. Those findings remain in checks and artifacts. Source patterns may
 individually match no files; the total source set must not be empty.
