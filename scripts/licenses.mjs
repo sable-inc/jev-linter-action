@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 
 /** Preserve license text and notices; an SPDX identifier cannot replace copyright notices. */
 export function dependencyNotices(root, packages) {
-  return Object.entries(packages).filter(([path]) => path.startsWith('node_modules/')).sort(([a], [b]) => a.localeCompare(b)).flatMap(([path, locked]) => {
+  return Object.entries(packages).filter(([path]) => path.startsWith('node_modules/')).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).flatMap(([path, locked]) => {
     const dir = new URL(`${path}/`, root);
     let metadata;
     try { metadata = JSON.parse(readFileSync(new URL('package.json', dir), 'utf8')); }

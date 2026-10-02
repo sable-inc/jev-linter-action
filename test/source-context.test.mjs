@@ -11,11 +11,13 @@ test('plain files and top-level JSON primitives remain available as context', ()
     for (const content of ['123', 'true', 'null']) assert.deepEqual(contextIndex([{path,content}]), [{path,content}]);
   }
   assert.deepEqual(contextIndex([{path:'guide.md',content:'"Quoted text"'}]), [{path:'guide.md',content:'"Quoted text"'}]);
+  assert.deepEqual(contextIndex([{path:'guide.json',content:'"Quoted text"'}]), [{path:'guide.json',content:'Quoted text'}]);
 });
 test('small documents without headings have neutral labels and complete context', () => {
   const source = {path:'guide.md',content:'Intro\nHonor scope.'};
   const context = passageContext([source], contextIndex([source]), [{path:source.path,line:2,endLine:2,text:'Honor scope.'}]);
   assert.match(context.text, /enclosing source \(document\)/);
+  assert.ok(context.text.includes('enclosing source (document):\nIntro\nHonor scope.'));
   assert.equal(context.truncated, false);
 });
 test('cropping neighbors, clipping selected entries, and omitted entries disclose truncation', () => {
