@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { dependencyNotices } from './licenses.mjs';
 import { spawnSync } from 'node:child_process';
 
 const root = new URL('../', import.meta.url);
@@ -14,4 +15,8 @@ const build = spawnSync('bun', ['build', 'src/main.mjs', '--target=node', '--out
   stdio: 'inherit',
 });
 if (build.error) console.error(build.error.message);
+if (build.status === 0) {
+  const lock = JSON.parse(readFileSync(new URL('package-lock.json', root), 'utf8'));
+  writeFileSync(new URL('dist/third-party-licenses.txt', root), dependencyNotices(root, lock.packages));
+}
 process.exit(build.status ?? 1);
