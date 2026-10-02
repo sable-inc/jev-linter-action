@@ -230,7 +230,7 @@ Only additions can receive inline comments in either mode; diff context and dele
 are never anchors. A changed-line review returns exit 1 for findings, exit 2 for provider
 errors, unavailable or truncated PR diffs, added source lines over 1,800 characters,
 structurally changed whitespace-only passages, or exhausted request limits, and exit 0 otherwise. Source coordinates come directly from the added lines, including template directives,
-and are verified again before publishing. Each passage is assessed once per suite/rule, batched
+and are verified again before publishing. Each passage is assessed once per suite/rule (and once for each independently reviewed context file with `perFile: true`), batched
 with up to four passages. Bounded source neighbors, selected shared instructions and matching
 compiled text supply context; a large bundle does not multiply targets by its chunk count.
 Selection uses literal matches and word overlap, not a whole-agent consistency guarantee. Reports disclose
@@ -238,9 +238,10 @@ omitted targets and cropped context. Deletion-only regressions are not covered, 
 finding does not prove that the edit introduced a new behavior relative to the base commit.
 
 Blank lines within a contiguous addition containing text are preserved in its target. An
-isolated blank addition is exempted only when parsing the document with and without those
-blank lines produces identical Markdown/GFM structure and literal values. Frontmatter/template
-edits and structural changes remain unreviewed coverage (exit 2). The report lists exempted
+isolated blank addition in a `.md` file is exempted only when parsing the document with and without those
+blank lines produces identical Markdown/GFM structure and literal values. Files containing `{{`, unterminated frontmatter, non-Markdown sources, frontmatter edits and structural changes remain unreviewed coverage (exit 2). The report lists exempted
 spans in `unchangedWhitespace`; no model call or inline comment is made for them.
+
+Provider failures preserve completed findings and coverage in the report. After the provider retries are exhausted, remaining requests are not attempted; failed targets and unattempted candidates are reported explicitly and the action exits 2.
 
 Manual full audits and synthetic calibration fixtures should leave this option disabled.

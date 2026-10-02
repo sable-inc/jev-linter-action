@@ -128,3 +128,46 @@ test('local exception preceding a template addition remains context without comp
   } });
   assert.equal(report.passed, true);
 });
+
+test('per-file review isolates context and accounts for every independent file', async t => {
+  const {root,options} = await setup(t);
+  await writeFile(join(root,'second.json'),JSON.stringify({instructions:'Independent policy.'}));
+  const perFile = {...config,suites:[{...config.suites[0],files:['*.json'],perFile:true}]};
+  const calls = [];
+  const deps = {fetcher:async (_,request) => {
+    const text = JSON.parse(request.body).state.files[0].content;
+    calls.push(text);
+    return Response.json({answers:{location_0:{type:'noul',noul:0.1}}});
+  }};
+  const report = await reviewChanges(perFile,root,options,deps);
+  assert.equal(report.locations.candidatePassages,2);
+  assert.equal(report.locations.assessments.length,2);
+  assert.deepEqual(report.locations.assessments.map(a=>a.contextFiles),[['bundle.json'],['second.json']]);
+  assert.ok(calls[0].includes('bundle.json/knowledge'));
+  assert.ok(!calls[0].includes('Independent policy.'));
+  assert.ok(calls[1].includes('Independent policy.'));
+  assert.ok(!calls[1].includes('bundle.json/knowledge'));
+  const bounded = await reviewChanges(perFile,root,{...options,maxRequests:1},deps);
+  assert.equal(bounded.locations.omittedCandidates,1);
+  assert.equal(bounded.incomplete,true);
+});
+test('provider failures preserve completed findings and expose failed and unattempted targets', async t => {
+  const {root,options} = await setup(t);
+  const lines = Array.from({length:12},(_,i)=>`Instruction ${i}.`);
+  await writeFile(join(root,'moment.md'),lines.join('\n\n'));
+  let calls = 0;
+  const report = await reviewChanges(config,root,{...options,priority:new Map([['moment.md',new Set(lines.map((_,i)=>i*2+1))]])},{
+    sleep:async()=>{},fetcher:async (_,request) => {
+      if (++calls > 1) return new Response('',{status:503});
+      return Response.json({answers:Object.fromEntries(Object.keys(JSON.parse(request.body).questions).map(id=>[id,{type:'noul',noul:0.96}]))});
+    },
+  });
+  assert.equal(calls,4); // One completed request followed by three provider attempts.
+  assert.equal(report.requests,2);
+  assert.equal(report.locations.findings.length,4);
+  assert.equal(report.locations.failedRequests[0].targets.length,4);
+  assert.equal(report.locations.unattemptedCandidates,4);
+  assert.equal(report.locations.omittedCandidates,0);
+  assert.equal(report.incomplete,true);
+  assert.equal(report.passed,false);
+});

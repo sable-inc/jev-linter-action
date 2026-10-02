@@ -9,11 +9,12 @@ import { reviewDiff, publishLocations } from '../src/github.mjs';
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'jev-git-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const git = (...args) => execFileSync('git', args, { cwd: root, env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_COUNT: '0' }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   git('init', '-b', 'main');
   git('config', 'user.name', 'Test'); git('config', 'user.email', 'test@example.test');
   const path = 'moment [démo].md';
   await writeFile(join(root, path), '# Demo\nKeep this.\nOld instruction.\n');
+  await writeFile(join(root, 'deleted.md'), 'Delete this baseline file.\n');
   git('add', '.'); git('commit', '-m', 'base');
   const ancestor = git('rev-parse', 'HEAD');
   await writeFile(join(root, path), '# Base-only change\nKeep this.\nOld instruction.\n');
@@ -73,13 +74,15 @@ test('fallback handles new files with or without a final newline and deletions',
     await writeFile(join(f.root, path), content);
     f.files.push({ filename: path, status: 'added', changes: 2 });
   }
-  f.files.push({ filename: 'deleted.md', status: 'removed', changes: 3 });
+  await rm(join(f.root, 'deleted.md'));
+  f.files.push({ filename: 'api-only.md', status: 'removed', changes: 3 });
   f.git('add', '.'); f.git('commit', '-m', 'new files');
   f.options.event.pull_request.head.sha = f.git('rev-parse', 'HEAD');
   const diff = await reviewDiff(f.options, f);
   assert.deepEqual([...diff.get('new.md')], [1, 2]);
   assert.deepEqual([...diff.get('no-newline.md')], [1, 2]);
-  assert.equal(diff.has('deleted.md'), false);
+  assert.equal(diff.has('api-only.md'), false);
+  assert.deepEqual([...diff.get('deleted.md')], []);
 });
 
 test('missing history and wrong checkouts fail explicitly instead of returning a clean review', async t => {
@@ -180,4 +183,13 @@ test('local snapshot reads committed blobs, ignoring worktree edits and unsafe G
   f.git('config', 'diff.hostile.command', 'false');
   await writeFile(join(f.root, f.path), 'Uncommitted text\n');
   assert.deepEqual([...(await reviewDiff(f.options, f)).get(f.path)], [3]);
+});
+
+test('publication ignores unrelated blobs larger than the Git buffer limit', async t => {
+  const f = await fixture(t);
+  await writeFile(join(f.root,'large.bin'),Buffer.alloc(33*1024*1024));
+  f.git('add','.'); f.git('commit','-m','unrelated binary');
+  f.options.event.pull_request.head.sha = f.git('rev-parse','HEAD');
+  const report = {locations:{findings:[{path:f.path,line:3,endLine:3,text:'New instruction.',rule:'test',question:'Compliant?',expected:true,probability:0.95}]}};
+  assert.equal((await publishLocations(report,f.options,f)).comments,1);
 });

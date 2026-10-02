@@ -65,7 +65,7 @@ const gitAt = root => async args => (await exec('git', args, {
   env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' },
 })).stdout;
 
-async function snapshotDiff(options, client, live) {
+async function snapshotDiff(options, client, live, paths) {
   const git = gitAt(options.root);
   const head = client.pr.head.sha, base = live.base?.sha ?? client.pr.base.sha;
   if (!/^[a-f0-9]{40}$/.test(base ?? '')) throw new Error('Missing PR base SHA');
@@ -84,7 +84,7 @@ async function snapshotDiff(options, client, live) {
     if (status.startsWith('R')) files.push({ status: 'renamed', previous_filename: before, filename: fields[i++] });
     else files.push({ status: status === 'A' ? 'added' : status === 'D' ? 'removed' : 'modified', filename: before });
   }
-  const diffs = await fileDiffs(files, options, client.pr, live, client.api, mergeBase);
+  const diffs = await fileDiffs(paths ? files.filter(file => paths.has(file.filename)) : files, options, client.pr, live, client.api, mergeBase);
   const after = await client.current();
   if ((after.base?.sha ?? client.pr.base.sha) !== base) throw new Error('PR base changed during diff collection; rerun against a stable revision');
   return diffs;
@@ -159,7 +159,7 @@ export async function publishLocations(report, options, deps) {
   if (!report.locations.findings.length) return { comments: 0, verified: 0, unmapped: 0, outsideDiff: 0, duplicates: 0 };
   const { pr, api, current, pages } = client;
   const live = await current();
-  const diffs = options.root ? await snapshotDiff(options, client, live)
+  const diffs = options.root ? await snapshotDiff(options, client, live, new Set(report.locations.findings.map(finding => finding.path)))
     : await fileDiffs(await pages(`/pulls/${pr.number}/files`), options, pr, live, api);
   const existing = await pages(`/pulls/${pr.number}/comments`);
   const prefix = `jev-location:${digest(reviewId).slice(0, 16)}`;

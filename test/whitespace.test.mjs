@@ -19,3 +19,14 @@ test('frontmatter and template whitespace cannot be exempted by Markdown parsing
 test('GFM table separation is a structural change', () => {
  assert.equal(check('| A |\n\n| --- |\n| B |',2).unreviewed.length,1);
 });
+test('unterminated and newly exposed frontmatter cannot be exempted', () => {
+ assert.equal(check('---\nNo close\n\nBody',3).unreviewed.length,1);
+ assert.equal(check('\n---\ntitle: Demo\n---\nBody',1).unreviewed.length,1);
+});
+test('ranged blanks are checked as a complete removal', () => {
+ const unit = {path:'example.md',line:3,endLine:4,text:''};
+ const result = classifyWhitespace([{path:unit.path,content:'# Title\n\n\n\nBody'}],[unit]);
+ assert.deepEqual(result.unchanged,[{path:unit.path,line:3,endLine:4}]);
+ const changed = classifyWhitespace([{path:unit.path,content:'```\nFirst\n\n\nLast\n```'}],[unit]);
+ assert.equal(changed.unreviewed.length,1);
+});

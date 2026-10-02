@@ -26,7 +26,7 @@ async function main() {
     : await lint(config, root, apiKey);
   report.source = { repository: process.env.GITHUB_REPOSITORY, commit: event?.pull_request?.head?.sha || process.env.GITHUB_SHA, runId: process.env.GITHUB_RUN_ID };
   let extensionFailed = report.incomplete === true;
-  if (report.incomplete) console.error('::error::Added-line review is incomplete: request budget exhausted or whitespace-only additions need structural review. See the saved coverage report.');
+  if (report.incomplete) console.error('::error::Added-line review is incomplete: provider failure, exhausted request budget, or whitespace-only additions requiring structural review. See the saved coverage report.');
   if (options.enabled) {
     try {
       const priority = !options.changedOnly && event?.pull_request?.head?.repo?.full_name === process.env.GITHUB_REPOSITORY && process.env['INPUT_GITHUB-TOKEN'] && !report.passed ? await reviewDiff({ root, event, eventName: process.env.GITHUB_EVENT_NAME, repo: process.env.GITHUB_REPOSITORY, token: process.env['INPUT_GITHUB-TOKEN'] }) : new Map();
@@ -60,7 +60,7 @@ async function main() {
   if (process.env.GITHUB_OUTPUT) await appendFile(process.env.GITHUB_OUTPUT, `report=${reportPath}\npassed=${report.passed}\n`);
   if (process.env.GITHUB_STEP_SUMMARY) {
     if (options.changedOnly) {
-      await appendFile(process.env.GITHUB_STEP_SUMMARY, `## Jev added-line review\n\n${report.locations.assessments.length} rule assessments; ${report.locations.findings.length} findings on added lines. ${report.locations.omittedCandidates} omitted candidates; ${report.locations.unreviewedWhitespace.length} whitespace-only added passages need structural review.\n\nOnly added lines are targets; surrounding built output supplies context. Findings require at least 0.80 violation probability. No findings is not proof of correctness. Deletion-only regressions are outside this check.\n`);
+      await appendFile(process.env.GITHUB_STEP_SUMMARY, `## Jev added-line review\n\n${report.locations.assessments.length} rule assessments; ${report.locations.findings.length} findings on added lines. ${report.locations.failedRequests.length} failed requests; ${report.locations.unattemptedCandidates} candidates not attempted after provider failure; ${report.locations.omittedCandidates} omitted candidates; ${report.locations.unreviewedWhitespace.length} whitespace-only added passages need structural review.\n\nOnly added lines are targets; surrounding built output supplies context. Findings require at least 0.80 violation probability. No findings is not proof of correctness. Deletion-only regressions are outside this check.\n`);
     }
     const rows = report.results.map(r => `| ${markdown(r.suite)} | ${markdown(r.files.join(', '))} | ${markdown(r.id)} | ${r.probability.toFixed(3)} | ${r.minProbability} | ${r.passed ? 'Pass' : 'Fail / review'} |`);
     if (!options.changedOnly) await appendFile(process.env.GITHUB_STEP_SUMMARY, ['## Jev lint', '', '| Suite | Files | Question | Expected-answer probability | Required | Result |', '| --- | --- | --- | --- | --- | --- |', ...rows, '', `Requests: ${report.requests}. Split review: ${report.split ? 'yes — distant batches are not compared together' : 'no'}.`, '', 'Probabilistic review checks; failures need review. This does not replace behavioral evals or code review.', ''].join('\n'));

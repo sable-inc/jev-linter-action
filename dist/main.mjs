@@ -8140,42 +8140,53 @@ ${content}`);
 
 // src/source-context.mjs
 var clip = (text, size, anchor = 0) => {
-  const start = Math.max(0, anchor - Math.floor(size / 3));
+  const start = Math.min(Math.max(0, text.length - size), Math.max(0, anchor - Math.floor(size / 3)));
   return text.slice(start, start + size);
 };
 function contextIndex(files) {
   const entries = [];
-  function visit(value, path) {
-    if (typeof value === "string")
-      entries.push({ path, content: value });
-    else if (value && typeof value === "object") {
-      for (const [key, child] of Object.entries(value))
-        visit(child, `${path}/${key}`);
-    }
-  }
   for (const file of files) {
     let value;
     try {
-      value = JSON.parse(file.content);
+      value = /\.json$/i.test(file.path) ? JSON.parse(file.content) : file.content;
     } catch {
       entries.push(file);
       continue;
     }
-    visit(value, file.path);
+    if (value === null || typeof value !== "object") {
+      entries.push({ ...file, content: typeof value === "string" ? value : file.content });
+      continue;
+    }
+    const pending = [{ value, path: file.path }];
+    while (pending.length) {
+      const { value: value2, path } = pending.pop();
+      if (typeof value2 === "string")
+        entries.push({ path, content: value2 });
+      else if (value2 && typeof value2 === "object") {
+        const children = Object.entries(value2);
+        for (let i = children.length - 1;i >= 0; i--) {
+          const [key, child] = children[i];
+          pending.push({ value: child, path: `${path}/${key}` });
+        }
+      }
+    }
   }
   return entries;
 }
 function passageContext(sources, entries, units) {
+  let truncated = false;
   const local = units.map((unit) => {
     const lines = sources.find((source) => source.path === unit.path).content.split(/\r?\n/);
     let heading = unit.line - 1;
-    while (heading > 0 && !/^#{1,6}\s/.test(lines[heading]))
+    while (heading >= 0 && !/^#{1,6}\s/.test(lines[heading]))
       heading--;
-    const start = Math.max(heading, unit.line - 12);
+    const start = Math.max(0, heading, unit.line - 12);
     const excerpt = clip(lines.slice(start, unit.endLine + 12).join(`
 `), 2400, lines.slice(start, unit.line - 1).join(`
 `).length);
-    return `${unit.path} — enclosing source (${lines[heading]}):
+    truncated ||= start > 0 || unit.endLine + 12 < lines.length || excerpt.length < lines.slice(start, unit.endLine + 12).join(`
+`).length;
+    return `${unit.path} — enclosing source (${heading >= 0 ? lines[heading] : "document"}):
 ${excerpt}`;
   });
   const targetText = units.map((unit) => unit.text).join(`
@@ -8194,6 +8205,7 @@ ${excerpt}`;
       if (seen.has(entry.index) || budget <= 0)
         continue;
       const text = clip(entry.content, Math.min(2400, budget), entry.match ?? 0);
+      truncated ||= text.length < entry.content.length;
       selected.push(`${entry.path}:
 ${text}`);
       seen.add(entry.index);
@@ -8203,11 +8215,12 @@ ${text}`);
   take(ranked.filter((e) => e.shared).sort((a, b) => b.overlap - a.overlap), 6000);
   take(ranked.filter((e) => e.match !== undefined), 4000);
   take(ranked.filter((e) => e.overlap > 0).sort((a, b) => b.overlap - a.overlap), 2000);
+  truncated ||= seen.size < entries.length;
   return {
-    text: [...local, "Selected built/shared context (not exhaustive):", ...selected].join(`
+    text: [...local, `Selected built/shared context${truncated ? " (not exhaustive)" : ""}:`, ...selected].join(`
 
 `),
-    truncated: true
+    truncated
   };
 }
 
@@ -17257,7 +17270,9 @@ async function reviewChanges(config, root, options, deps) {
     findings: [],
     assessments: [],
     requests: 0,
-    candidatePassages: units.length * config.suites.length,
+    candidatePassages: 0,
+    failedRequests: [],
+    unattemptedCandidates: 0,
     unlocatedGroups: 0,
     omittedCandidates: 0,
     unchangedWhitespace: whitespace.unchanged,
@@ -17268,7 +17283,10 @@ async function reviewChanges(config, root, options, deps) {
     const files = await collect(root, suite.files);
     if ([...files, ...sources].some((file) => file.content.includes("JEV_TARGET_")))
       throw new Error("Authored text collides with review markers");
-    queues.push({ suite, index: contextIndex(files), offset: 0 });
+    for (const group of suite.perFile ? files.map((file) => [file]) : [files]) {
+      queues.push({ suite, contextFiles: group.map((file) => file.path), index: contextIndex(group), offset: 0 });
+      locations.candidatePassages += units.length;
+    }
   }
   const jobs = [];
   while (jobs.length < maxRequests2) {
@@ -17290,7 +17308,7 @@ async function reviewChanges(config, root, options, deps) {
             throw error;
         }
       }
-      jobs.push({ ...request, targets, failures });
+      jobs.push({ ...request, targets, failures, contextFiles: queue.contextFiles });
       queue.offset += count;
       progress = true;
     }
@@ -17299,8 +17317,19 @@ async function reviewChanges(config, root, options, deps) {
   }
   locations.omittedCandidates = locations.candidatePassages - jobs.reduce((n, job) => n + job.targets.length, 0);
   for (const job of jobs) {
-    const answers = await evaluate(job.suite, job.files, config.model, options.apiKey, deps);
     locations.requests++;
+    let answers;
+    try {
+      answers = await evaluate(job.suite, job.files, config.model, options.apiKey, deps);
+    } catch {
+      locations.failedRequests.push({
+        request: locations.requests,
+        contextFiles: job.contextFiles,
+        targets: job.targets.map(({ path: path2, line, endLine }) => ({ path: path2, line, endLine }))
+      });
+      locations.unattemptedCandidates = jobs.slice(locations.requests).reduce((n, pending) => n + pending.targets.length, 0);
+      break;
+    }
     answers.forEach((answer, index2) => {
       const failure = job.failures[index2 % job.failures.length];
       const unit = job.targets[Math.floor(index2 / job.failures.length)];
@@ -17310,14 +17339,16 @@ async function reviewChanges(config, root, options, deps) {
         endLine: unit.endLine,
         rule: failure.id,
         suite: failure.suite,
+        contextFiles: job.contextFiles,
         violationProbability: answer.probability,
         localized: answer.passed
       });
       if (!answer.passed)
         return;
       locations.findings.push({
-        id: digest(JSON.stringify([failure.suite, failure.id, unit.path, unit.line, unit.endLine, unit.text])).slice(0, 24),
+        id: digest(JSON.stringify([failure.suite, failure.id, job.contextFiles, unit.path, unit.line, unit.endLine, unit.text])).slice(0, 24),
         suite: failure.suite,
+        contextFiles: job.contextFiles,
         rule: failure.id,
         question: failure.question,
         expected: failure.expected,
@@ -17327,7 +17358,7 @@ async function reviewChanges(config, root, options, deps) {
       });
     });
   }
-  const incomplete = locations.omittedCandidates > 0 || locations.unreviewedWhitespace.length > 0;
+  const incomplete = locations.omittedCandidates > 0 || locations.unreviewedWhitespace.length > 0 || locations.failedRequests.length > 0;
   return {
     scope: "added-lines",
     contextScope: "source-neighbors-and-selected-built-context",
@@ -17521,7 +17552,7 @@ var gitAt = (root) => async (args) => (await exec("git", args, {
   maxBuffer: 32 * 1024 * 1024,
   env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" }
 })).stdout;
-async function snapshotDiff(options, client, live) {
+async function snapshotDiff(options, client, live, paths) {
   const git = gitAt(options.root);
   const head = client.pr.head.sha, base = live.base?.sha ?? client.pr.base.sha;
   if (!/^[a-f0-9]{40}$/.test(base ?? ""))
@@ -17546,7 +17577,7 @@ async function snapshotDiff(options, client, live) {
     else
       files.push({ status: status === "A" ? "added" : status === "D" ? "removed" : "modified", filename: before });
   }
-  const diffs = await fileDiffs(files, options, client.pr, live, client.api, mergeBase);
+  const diffs = await fileDiffs(paths ? files.filter((file) => paths.has(file.filename)) : files, options, client.pr, live, client.api, mergeBase);
   const after = await client.current();
   if ((after.base?.sha ?? client.pr.base.sha) !== base)
     throw new Error("PR base changed during diff collection; rerun against a stable revision");
@@ -17634,7 +17665,7 @@ async function publishLocations(report, options, deps) {
     return { comments: 0, verified: 0, unmapped: 0, outsideDiff: 0, duplicates: 0 };
   const { pr, api, current, pages } = client;
   const live = await current();
-  const diffs = options.root ? await snapshotDiff(options, client, live) : await fileDiffs(await pages(`/pulls/${pr.number}/files`), options, pr, live, api);
+  const diffs = options.root ? await snapshotDiff(options, client, live, new Set(report.locations.findings.map((finding) => finding.path))) : await fileDiffs(await pages(`/pulls/${pr.number}/files`), options, pr, live, api);
   const existing = await pages(`/pulls/${pr.number}/comments`);
   const prefix = `jev-location:${digest(reviewId).slice(0, 16)}`;
   const headMarker = `<!-- ${prefix}:head:${pr.head.sha} -->`;
@@ -17771,7 +17802,7 @@ async function main() {
   report.source = { repository: process.env.GITHUB_REPOSITORY, commit: event?.pull_request?.head?.sha || process.env.GITHUB_SHA, runId: process.env.GITHUB_RUN_ID };
   let extensionFailed = report.incomplete === true;
   if (report.incomplete)
-    console.error("::error::Added-line review is incomplete: request budget exhausted or whitespace-only additions need structural review. See the saved coverage report.");
+    console.error("::error::Added-line review is incomplete: provider failure, exhausted request budget, or whitespace-only additions requiring structural review. See the saved coverage report.");
   if (options.enabled) {
     try {
       const priority2 = !options.changedOnly && event?.pull_request?.head?.repo?.full_name === process.env.GITHUB_REPOSITORY && process.env["INPUT_GITHUB-TOKEN"] && !report.passed ? await reviewDiff({ root, event, eventName: process.env.GITHUB_EVENT_NAME, repo: process.env.GITHUB_REPOSITORY, token: process.env["INPUT_GITHUB-TOKEN"] }) : new Map;
@@ -17825,7 +17856,7 @@ passed=${report.passed}
     if (options.changedOnly) {
       await appendFile2(process.env.GITHUB_STEP_SUMMARY, `## Jev added-line review
 
-${report.locations.assessments.length} rule assessments; ${report.locations.findings.length} findings on added lines. ${report.locations.omittedCandidates} omitted candidates; ${report.locations.unreviewedWhitespace.length} whitespace-only added passages need structural review.
+${report.locations.assessments.length} rule assessments; ${report.locations.findings.length} findings on added lines. ${report.locations.failedRequests.length} failed requests; ${report.locations.unattemptedCandidates} candidates not attempted after provider failure; ${report.locations.omittedCandidates} omitted candidates; ${report.locations.unreviewedWhitespace.length} whitespace-only added passages need structural review.
 
 Only added lines are targets; surrounding built output supplies context. Findings require at least 0.80 violation probability. No findings is not proof of correctness. Deletion-only regressions are outside this check.
 `);

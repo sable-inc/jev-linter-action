@@ -32,7 +32,7 @@ test('localization errors preserve the completed review and action outputs', asy
 test('saved matrix reports publish one inline review without a TypeSafe key or summary comments', async t => {
   const root = await mkdtemp(join(tmpdir(), 'jev-publish-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const git = (...args) => execFileSync('git', args, { cwd: root, env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_COUNT: '0' }, encoding: 'utf8' }).trim();
   git('init', '-b', 'main'); git('config', 'user.name', 'Test'); git('config', 'user.email', 'test@example.test');
   git('commit', '--allow-empty', '-m', 'base');
   const base = git('rev-parse', 'HEAD');
@@ -87,4 +87,41 @@ test('whole-input localization on a fork skips GitHub diff prioritization', asyn
   const report=JSON.parse(await readFile(outputs.match(/^report=(.+)$/m)[1],'utf8'));
   assert.equal(report.locations.findings.length,1);
   assert.equal(report.localizationError,undefined);
+});
+
+test('changed-line provider failure saves partial findings and exits incomplete', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'jev-partial-'));
+  t.after(() => rm(root, {recursive:true,force:true}));
+  const git = (...args) => execFileSync('git',args,{cwd:root,encoding:'utf8',env:{...process.env,GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_CONFIG_COUNT:'0'}}).trim();
+  git('init','-b','main'); git('config','user.name','Test'); git('config','user.email','test@example.test');
+  git('commit','--allow-empty','-m','base');
+  const base = git('rev-parse','HEAD');
+  await writeFile(join(root,'moment.md'),Array.from({length:8},(_,i)=>`Instruction ${i}.`).join('\n\n'));
+  git('add','moment.md'); git('commit','-m','new instructions');
+  const sha = git('rev-parse','HEAD'), repo = 'example/prompts';
+  await writeFile(join(root,'bundle.json'),JSON.stringify({instructions:'Honor the visitor scope.'}));
+  await writeFile(join(root,'event.json'),JSON.stringify({pull_request:{number:1,head:{sha,repo:{full_name:repo}},base:{sha:base,repo:{full_name:repo}}}}));
+  await writeFile(join(root,'mock.mjs'),`
+    let calls = 0;
+    globalThis.fetch = async (url,request) => {
+      if(new URL(url).origin === 'https://api.github.com') return Response.json({state:'open',head:{sha:${JSON.stringify(sha)}},base:{sha:${JSON.stringify(base)}}});
+      if(++calls > 1) return new Response('',{status:401});
+      return Response.json({answers:Object.fromEntries(Object.keys(JSON.parse(request.body).questions).map(id=>[id,{type:'noul',noul:0.96}]))});
+    };
+  `);
+  const output = join(root,'outputs');
+  const result = spawnSync(process.execPath,['--import',join(root,'mock.mjs'),fileURLToPath(new URL('../src/main.mjs',import.meta.url))],{cwd:root,encoding:'utf8',env:{
+    PATH:process.env.PATH,RUNNER_TEMP:root,GITHUB_OUTPUT:output,GITHUB_STEP_SUMMARY:join(root,'summary'),GITHUB_EVENT_PATH:join(root,'event.json'),GITHUB_EVENT_NAME:'pull_request',GITHUB_REPOSITORY:repo,
+    INPUT_MODEL:'jev-1.13.0',INPUT_GLOB:'bundle.json',INPUT_QUESTIONS:JSON.stringify([{id:'scope',question:'Does this force completion?',expect:false}]),
+    INPUT_LOCATE:'true','INPUT_CHANGED-LINES-ONLY':'true','INPUT_SOURCE-GLOB':'*.md','INPUT_API-KEY':'secret-test-key','INPUT_GITHUB-TOKEN':'mock-token',
+  }});
+  assert.equal(result.status,2,result.stderr);
+  const outputs = await readFile(output,'utf8');
+  const saved = await readFile(outputs.match(/^report=(.+)$/m)[1],'utf8');
+  const report = JSON.parse(saved);
+  assert.equal(report.locations.findings.length,4);
+  assert.equal(report.locations.failedRequests.length,1);
+  assert.equal(report.incomplete,true);
+  assert.match(await readFile(join(root,'summary'),'utf8'),/1 failed requests/);
+  assert.ok(!saved.includes('secret-test-key'));
 });
