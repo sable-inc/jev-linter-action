@@ -153,12 +153,12 @@ and workflow concurrency per PR to serialize publication.
 
 Build and localize the PR head as in the checkout example, so coordinates refer to the same
 revision used for publication. Use `fetch-depth: 0` for both review and publication checkouts.
-When GitHub omits a file patch, the action compares its committed blobs at the PR merge base
-and HEAD to recover added lines (including renames). If the base has advanced beyond the local
+With a checkout, the action derives both the file list and added lines from committed blobs
+at one merge-base/HEAD snapshot (including renames), without using live file-list counts or API patches. If the base has advanced beyond the local
 checkout, GitHub compare metadata supplies the current merge-base SHA; its blobs remain in full
 PR HEAD history. This does not fetch history or run external diff/textconv commands. Shallow
 history or the wrong checkout produces an explicit execution error instead of silently skipping
-additions. Stale PR heads and forks cannot receive writes. A merge checkout
+additions. Heads and bases are checked again before publication; stale revisions and forks cannot receive writes. A merge checkout
 may contain base-only changes that make coordinates unverified; GitHub may also omit inline
 content for large files. Those findings remain in checks and artifacts. Source patterns may
 individually match no files; the total source set must not be empty.
@@ -229,13 +229,18 @@ to whole-input mode and fixtures. Absence of a finding is not proof of correctne
 Only additions can receive inline comments in either mode; diff context and deleted lines
 are never anchors. A changed-line review returns exit 1 for findings, exit 2 for provider
 errors, unavailable or truncated PR diffs, added source lines over 1,800 characters,
-whitespace-only added passages, or exhausted request limits, and exit 0 otherwise. Source coordinates come directly from the added lines, including template directives,
-and are verified again before publishing. Built excerpts supply context. Reports disclose
+structurally changed whitespace-only passages, or exhausted request limits, and exit 0 otherwise. Source coordinates come directly from the added lines, including template directives,
+and are verified again before publishing. Each passage is assessed once per suite/rule, batched
+with up to four passages. Bounded source neighbors, selected shared instructions and matching
+compiled text supply context; a large bundle does not multiply targets by its chunk count.
+Selection uses literal matches and word overlap, not a whole-agent consistency guarantee. Reports disclose
 omitted targets and cropped context. Deletion-only regressions are not covered, and a
 finding does not prove that the edit introduced a new behavior relative to the base commit.
 
 Blank lines within a contiguous addition containing text are preserved in its target. An
-isolated whitespace-only addition can change Markdown/template structure; it is reported as
-unreviewed coverage and makes the review incomplete (exit 2), rather than silently passing.
+isolated blank addition is exempted only when parsing the document with and without those
+blank lines produces identical Markdown/GFM structure and literal values. Frontmatter/template
+edits and structural changes remain unreviewed coverage (exit 2). The report lists exempted
+spans in `unchangedWhitespace`; no model call or inline comment is made for them.
 
 Manual full audits and synthetic calibration fixtures should leave this option disabled.

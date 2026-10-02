@@ -60,11 +60,41 @@ function reviewClient({ event, eventName, repo, token }, { fetcher = fetch } = {
 
 const exec = promisify(execFile);
 
+const gitAt = root => async args => (await exec('git', args, {
+  cwd: root, encoding: 'utf8', timeout: 30_000, maxBuffer: 32 * 1024 * 1024,
+  env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' },
+})).stdout;
+
+async function snapshotDiff(options, client, live) {
+  const git = gitAt(options.root);
+  const head = client.pr.head.sha, base = live.base?.sha ?? client.pr.base.sha;
+  if (!/^[a-f0-9]{40}$/.test(base ?? '')) throw new Error('Missing PR base SHA');
+  if ((await git(['rev-parse', 'HEAD'])).trim() !== head || (await git(['rev-parse', '--is-shallow-repository'])).trim() !== 'false') {
+    throw new Error('Check out the exact PR HEAD with fetch-depth: 0');
+  }
+  let mergeBase;
+  try { mergeBase = (await git(['merge-base', base, head])).trim(); }
+  catch { mergeBase = (await client.api(`/compare/${base}...${head}`))?.merge_base_commit?.sha; }
+  if (!/^[a-f0-9]{40}$/.test(mergeBase ?? '')) throw new Error('PR local Git fallback failed: invalid merge base');
+  // NUL-delimited names preserve spaces, Unicode, tabs and newlines. Never execute attributes.
+  const fields = (await git(['diff', '--no-ext-diff', '--no-textconv', '--name-status', '-z', '--find-renames', mergeBase, head, '--'])).split('\0');
+  const files = [];
+  for (let i = 0; fields[i];) {
+    const status = fields[i++], before = fields[i++];
+    if (status.startsWith('R')) files.push({ status: 'renamed', previous_filename: before, filename: fields[i++] });
+    else files.push({ status: status === 'A' ? 'added' : status === 'D' ? 'removed' : 'modified', filename: before });
+  }
+  const diffs = await fileDiffs(files, options, client.pr, live, client.api, mergeBase);
+  const after = await client.current();
+  if ((after.base?.sha ?? client.pr.base.sha) !== base) throw new Error('PR base changed during diff collection; rerun against a stable revision');
+  return diffs;
+}
+
 // Compare committed blobs so renames preserve their unchanged lines and Git
 // attributes cannot run external diff/textconv commands on the checked-out PR.
-async function fileDiffs(files, options, pr, live, api) {
+async function fileDiffs(files, options, pr, live, api, resolvedBase) {
   const diffs = new Map();
-  let mergeBase;
+  let mergeBase = resolvedBase;
   const git = async args => (await exec('git', args, {
     cwd: options.root, encoding: 'utf8', timeout: 30_000, maxBuffer: 32 * 1024 * 1024,
     env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' },
@@ -112,6 +142,7 @@ export async function reviewDiff(options, deps) {
   const client = reviewClient(options, deps);
   if (!client) return new Map();
   const live = await client.current();
+  if (options.root) return snapshotDiff(options, client, live);
   if (live.changed_files > 3000) throw new Error('PR diff exceeds the GitHub 3000-file limit; cannot review complete additions');
   const files = await client.pages(`/pulls/${client.pr.number}/files`);
   if (Number.isInteger(live.changed_files) && files.length !== live.changed_files) throw new Error('Incomplete PR diff: changed-file count does not match returned files');
@@ -128,9 +159,8 @@ export async function publishLocations(report, options, deps) {
   if (!report.locations.findings.length) return { comments: 0, verified: 0, unmapped: 0, outsideDiff: 0, duplicates: 0 };
   const { pr, api, current, pages } = client;
   const live = await current();
-  const files = await pages(`/pulls/${pr.number}/files`);
-  const paths = new Set(report.locations.findings.map(finding => finding.path));
-  const diffs = await fileDiffs(files.filter(file => paths.has(file.filename)), options, pr, live, api);
+  const diffs = options.root ? await snapshotDiff(options, client, live)
+    : await fileDiffs(await pages(`/pulls/${pr.number}/files`), options, pr, live, api);
   const existing = await pages(`/pulls/${pr.number}/comments`);
   const prefix = `jev-location:${digest(reviewId).slice(0, 16)}`;
   const headMarker = `<!-- ${prefix}:head:${pr.head.sha} -->`;
@@ -159,7 +189,8 @@ export async function publishLocations(report, options, deps) {
     pending.push({ path: finding.path, line: anchor, side: 'RIGHT', body: `${marker}\n${headMarker}\n${findingBody(finding, repo, pr.head.sha)}` });
   }
   if (pending.length) {
-    await current();
+    const latest = await current();
+    if (latest.base?.sha !== live.base?.sha) throw new Error('PR base changed before publication; rerun review');
     await api(`/pulls/${pr.number}/reviews`, 'POST', {
       commit_id: pr.head.sha, event: 'COMMENT',
       body: 'Jev flagged the following source passages for review against the named rules.',

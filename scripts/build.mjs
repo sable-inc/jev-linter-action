@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 
 const root = new URL('../', import.meta.url);
@@ -14,4 +14,15 @@ const build = spawnSync('bun', ['build', 'src/main.mjs', '--target=node', '--out
   stdio: 'inherit',
 });
 if (build.error) console.error(build.error.message);
+if (build.status === 0) {
+  const lock = JSON.parse(readFileSync(new URL('package-lock.json', root), 'utf8'));
+  const notices = Object.keys(lock.packages).filter(path => path.startsWith('node_modules/')).sort().map(path => {
+    const dir = new URL(`${path}/`, root);
+    const metadata = JSON.parse(readFileSync(new URL('package.json', dir), 'utf8'));
+    const license = ['LICENSE', 'LICENSE.md', 'license', 'license.md', 'LICENSE-MIT', 'LICENSE.txt'].map(name => new URL(name, dir)).find(existsSync);
+    if (!license) throw new Error(`Missing license text for ${metadata.name}`);
+    return `${metadata.name}@${metadata.version}\n${readFileSync(license, 'utf8')}`;
+  });
+  writeFileSync(new URL('dist/third-party-licenses.txt', root), notices.join('\n\n'));
+}
 process.exit(build.status ?? 1);

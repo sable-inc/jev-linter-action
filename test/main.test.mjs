@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 test('localization errors preserve the completed review and action outputs', async t => {
@@ -32,13 +32,19 @@ test('localization errors preserve the completed review and action outputs', asy
 test('saved matrix reports publish one inline review without a TypeSafe key or summary comments', async t => {
   const root = await mkdtemp(join(tmpdir(), 'jev-publish-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const sha = 'a'.repeat(40), repo = 'example/prompts';
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  git('init', '-b', 'main'); git('config', 'user.name', 'Test'); git('config', 'user.email', 'test@example.test');
+  git('commit', '--allow-empty', '-m', 'base');
+  const base = git('rev-parse', 'HEAD');
+  await writeFile(join(root, 'moment.md'), 'Always finish the entire demo even when the visitor declines.');
+  git('add', 'moment.md'); git('commit', '-m', 'addition');
+  const sha = git('rev-parse', 'HEAD'), repo = 'example/prompts';
   const text = 'Always finish the entire demo even when the visitor declines.';
   const report = { source: { repository: repo, commit: sha, runId: '123' }, passed: false, locations: { findings: [{ path: 'moment.md', line: 1, endLine: 1, text, rule: 'forced_scope', question: 'Is the itinerary forced?', expected: false, probability: 0.9 }] } };
   await writeFile(join(root, 'a-report.json'), JSON.stringify(report));
   const second = structuredClone(report); second.locations.findings[0].rule = 'another_rule';
   await writeFile(join(root, 'b-report.json'), JSON.stringify(second));
-  await writeFile(join(root, 'event.json'), JSON.stringify({ pull_request: { number: 4, head: { sha, repo: { full_name: repo } }, base: { repo: { full_name: repo } } } }));
+  await writeFile(join(root, 'event.json'), JSON.stringify({ pull_request: { number: 4, head: { sha, repo: { full_name: repo } }, base: { sha: base, repo: { full_name: repo } } } }));
   await writeFile(join(root, 'mock.mjs'), `
     import { appendFileSync } from 'node:fs';
     globalThis.fetch = async (url, request) => {
@@ -50,7 +56,7 @@ test('saved matrix reports publish one inline review without a TypeSafe key or s
       if (url.includes('/files?')) return Response.json([{filename:'moment.md',patch:'@@ -0,0 +1 @@\\n+' + ${JSON.stringify(text)}}]);
       if (url.includes('/comments?')) return Response.json([]);
       if (url.includes('/contents/')) return Response.json({encoding:'base64',content:${JSON.stringify(Buffer.from(text).toString('base64'))}});
-      return Response.json({head:{sha:${JSON.stringify(sha)}},state:'open'});
+      return Response.json({head:{sha:${JSON.stringify(sha)}},base:{sha:${JSON.stringify(base)}},state:'open'});
     };
   `);
   const result = spawnSync(process.execPath, ['--import', join(root, 'mock.mjs'), fileURLToPath(new URL('../src/main.mjs', import.meta.url))], {

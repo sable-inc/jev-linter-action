@@ -79,7 +79,7 @@ test('fallback handles new files with or without a final newline and deletions',
   const diff = await reviewDiff(f.options, f);
   assert.deepEqual([...diff.get('new.md')], [1, 2]);
   assert.deepEqual([...diff.get('no-newline.md')], [1, 2]);
-  assert.deepEqual([...diff.get('deleted.md')], []);
+  assert.equal(diff.has('deleted.md'), false);
 });
 
 test('missing history and wrong checkouts fail explicitly instead of returning a clean review', async t => {
@@ -90,13 +90,13 @@ test('missing history and wrong checkouts fail explicitly instead of returning a
   const missingBase = { fetcher: async (url, request) => new URL(url).pathname.endsWith('/pulls/1')
     ? Response.json({ state: 'open', head: f.options.event.pull_request.head, base: { sha: 'b'.repeat(40) }, changed_files: 1 })
     : f.fetcher(url, request) };
-  await assert.rejects(reviewDiff(f.options, missingBase), /local Git fallback failed/);
+  await assert.rejects(reviewDiff(f.options, missingBase), /Unexpected .*compare|local Git fallback failed/);
 });
 
 test('available API patches do not require a local checkout', async t => {
   const f = await fixture(t);
   f.files[0].patch = '@@ -3 +3 @@\n-Old instruction.\n+New instruction.\n';
-  const options = { ...f.options, root: '/does-not-exist' };
+  const options = { ...f.options, root: undefined };
   assert.deepEqual([...(await reviewDiff(options, f)).get(f.path)], [3]);
 });
 
@@ -107,7 +107,7 @@ test('deleted files without patches never require a HEAD blob or checkout', asyn
     { filename: 'removed.md', status: 'removed', changes: 3, additions: 0 },
     { filename: 'deleted.md', status: 'deleted', changes: 3, additions: 0 },
   );
-  const diff = await reviewDiff({ ...f.options, root: '/does-not-exist' }, f);
+  const diff = await reviewDiff({ ...f.options, root: undefined }, f);
   assert.deepEqual([...diff.get('removed.md')], []);
   assert.deepEqual([...diff.get('deleted.md')], []);
 });
@@ -153,4 +153,31 @@ test('shallow checkouts are rejected even when their merge-base blob is present'
     await assert.rejects(reviewDiff({ ...f.options, root: join(f.root, 'shallow') }, { fetcher }), /fetch-depth: 0/);
   }
   assert.equal(comparisons, 0);
+});
+
+test('local snapshot ignores inconsistent API file counts and never asks for live file pages', async t => {
+  const f = await fixture(t);
+  const fetcher = async (url, request) => {
+    const path = new URL(url).pathname;
+    assert.ok(!path.endsWith('/files'));
+    if (path.endsWith('/pulls/1')) return Response.json({state:'open',head:f.options.event.pull_request.head,base:f.options.event.pull_request.base,changed_files:9999});
+    return f.fetcher(url, request);
+  };
+  assert.deepEqual([...(await reviewDiff(f.options, {fetcher})).get(f.path)], [3]);
+});
+
+test('a base revision changing during enumeration fails rather than returning mixed coverage', async t => {
+  const f = await fixture(t);
+  let reads = 0;
+  const fetcher = async () => Response.json({state:'open',head:f.options.event.pull_request.head,
+    base:{sha:++reads === 1 ? f.options.event.pull_request.base.sha : 'c'.repeat(40)}});
+  await assert.rejects(reviewDiff(f.options, {fetcher}), /base changed/);
+});
+
+test('local snapshot reads committed blobs, ignoring worktree edits and unsafe Git attributes', async t => {
+  const f = await fixture(t);
+  await writeFile(join(f.root, '.gitattributes'), '*.md diff=hostile\n');
+  f.git('config', 'diff.hostile.command', 'false');
+  await writeFile(join(f.root, f.path), 'Uncommitted text\n');
+  assert.deepEqual([...(await reviewDiff(f.options, f)).get(f.path)], [3]);
 });

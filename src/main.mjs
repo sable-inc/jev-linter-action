@@ -48,7 +48,8 @@ async function main() {
   }
   const reportPath = resolve(process.env.RUNNER_TEMP || tmpdir(), `jev-lint-${process.pid}.json`);
   await writeFile(reportPath, JSON.stringify(report, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
-  if (report.split) console.log('::warning::Review split to respect the Jev context budget. All content is covered with overlapping excerpts; conflicts between distant batches may be missed.');
+  if (report.scope === 'added-lines') console.log('::notice::Added passages are reviewed with bounded source neighbors and selected built/shared context. This is not a whole-agent consistency check.');
+  else if (report.split) console.log('::warning::Review split to respect the Jev context budget. All content is covered with overlapping excerpts; conflicts between distant batches may be missed.');
   for (const result of report.results) {
     const batch = result.review.split ? ` / batch ${result.review.batch}/${result.review.batches}` : '';
     const message = `${result.suite}${batch} / ${result.files.join(', ')} / ${result.id}: expected ${result.expected}, probability ${result.probability.toFixed(3)}, required ${result.minProbability}`;
